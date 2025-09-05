@@ -4,13 +4,15 @@ from flask import Flask, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from dotenv import load_dotenv
-from flask_cors import CORS  # import CORS here
+from flask_cors import CORS
 
 db = SQLAlchemy()
 migrate = Migrate()
 
 def create_app():
+    # Load environment variables from .env
     load_dotenv()
+
     app = Flask(__name__)
 
     # ---------------- CONFIG ----------------
@@ -20,6 +22,8 @@ def create_app():
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 
+    # Limit upload size (optional but recommended)
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
 
     # ---------------- UPLOAD FOLDERS ----------------
     IMAGE_UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads", "images")
@@ -33,6 +37,16 @@ def create_app():
     # ---------------- INIT EXTENSIONS ----------------
     db.init_app(app)
     migrate.init_app(app, db)
+
+    # Enable CORS for frontend dev servers
+    CORS(
+        app,
+        resources={r"/*": {"origins": [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000"
+        ]}},
+        supports_credentials=True
+    )
 
     # ---------------- ROUTES ----------------
     from app.routes import bp as user_bp
@@ -49,12 +63,5 @@ def create_app():
     @app.route("/uploads/docs/<filename>")
     def uploaded_doc(filename):
         return send_from_directory(app.config["UPLOAD_FOLDER_DOCS"], filename)
-
-    @app.route("/")
-    def index():
-        return {"message": "API is running"}
-
-    # ----------------- ENABLE CORS ------------------
-    CORS(app)  # apply CORS to the same app, do NOT create a new app
 
     return app
