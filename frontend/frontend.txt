@@ -1,0 +1,5143 @@
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\api\api.js =====
+
+// src/api/api.js
+import axios from "axios";
+
+const BASE_URL = "http://127.0.0.1:5000";
+
+const api = axios.create({
+  baseURL: BASE_URL,
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
+});
+
+// Request interceptor to add auth token
+api.interceptors.request.use(
+  (config) => {
+    console.log(`Making ${config.method?.toUpperCase()} request to ${config.url}`);
+    const token = localStorage.getItem("token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    console.error("Request error:", error);
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor to handle token expiration
+api.interceptors.response.use(
+  (response) => {
+    console.log(`Received response from ${response.config.url}:`, response.data);
+    return response;
+  },
+  async (error) => {
+    console.error("Response error:", error);
+    const originalRequest = error.config;
+
+    // If error is 401 and we haven't tried refreshing yet
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        // Try to refresh the token
+        const res = await api.post("/refresh");
+        const newToken = res.data.token;
+        localStorage.setItem("token", newToken);
+
+        // Update the original request with new token
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        // If refresh fails, show error message and then logout user
+        console.error("Token refresh failed:", refreshError);
+
+        // Create a more user-friendly error message
+        const errorMessage = document.createElement('div');
+        errorMessage.style.position = 'fixed';
+        errorMessage.style.top = '20px';
+        errorMessage.style.right = '20px';
+        errorMessage.style.padding = '15px';
+        errorMessage.style.backgroundColor = '#f44336';
+        errorMessage.style.color = 'white';
+        errorMessage.style.borderRadius = '4px';
+        errorMessage.style.zIndex = '9999';
+        errorMessage.textContent = 'Your session has expired. Please log in again.';
+        document.body.appendChild(errorMessage);
+
+        // Remove the message after 3 seconds and then redirect
+        setTimeout(() => {
+          document.body.removeChild(errorMessage);
+          localStorage.removeItem("token");
+          window.location.href = "/";
+        }, 3000);
+
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+// Token management functions
+export const setAuthToken = (token) => {
+  if (token) {
+    localStorage.setItem("token", token);
+  } else {
+    localStorage.removeItem("token");
+  }
+};
+
+export const getToken = () => {
+  return localStorage.getItem("token");
+};
+
+export const isAuthenticated = () => {
+  const token = getToken();
+  if (!token) return false;
+
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const currentTime = Math.floor(Date.now() / 1000);
+    return payload.exp > currentTime;
+  } catch (err) {
+    return false;
+  }
+};
+
+export const getUserInfo = () => {
+  const token = getToken();
+  if (!token) return null;
+
+  try {
+    return JSON.parse(atob(token.split('.')[1]));
+  } catch (err) {
+    return null;
+  }
+};
+
+export const removeAuthToken = () => {
+  localStorage.removeItem("token");
+};
+
+// Authentication APIs
+export const login = async (username, password) => {
+  try {
+    console.log("Attempting login with:", { username, password });
+
+    // Create a URL-encoded form data
+    const formData = new URLSearchParams();
+    formData.append('username', username);
+    formData.append('password', password);
+
+    const response = await api.post("/login", formData.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    console.log("Login response:", response);
+
+    if (!response.data || !response.data.token) {
+      throw new Error("No token received from server");
+    }
+
+    const { token } = response.data;
+    console.log("Received token:", token);
+
+    // Store token in localStorage
+    localStorage.setItem("token", token);
+
+    return response;
+  } catch (error) {
+    console.error("Login error:", error);
+    throw error;
+  }
+};
+
+export const logout = async () => {
+  try {
+    await api.post("/logout");
+    removeAuthToken();
+  } catch (error) {
+    // Even if logout fails on server, clear local token
+    removeAuthToken();
+    throw error;
+  }
+};
+
+// User Management APIs
+export const fetchUsers = () => api.get("/users");
+export const createUser = (data) => api.post("/users", data);
+export const deleteUser = (id) => api.delete(`/users/${id}`);
+export const updateUser = (id, data) => api.put(`/users/${id}`, data);
+export const fetchUser = (id) => api.get(`/users/${id}`);
+
+// Password Management
+export const changePassword = (userId, newPassword) =>
+  api.put(`/users/${userId}/password`, { new_password: newPassword });
+
+// Property APIs
+export const fetchProperties = () => api.get("/properties");
+export const createProperty = (data) => api.post("/properties", data);
+export const updateProperty = (id, data) => api.put(`/properties/${id}`, data);
+export const deleteProperty = (id) => api.delete(`/properties/${id}`);
+
+// File upload: image
+export const uploadPropertyImage = (propertyId, formData) =>
+  api.post(`/properties/${propertyId}/upload_image`, formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+
+// File upload: verification docs
+export const uploadPropertyVerificationDocs = (propertyId, formData) =>
+  api.post(`/properties/${propertyId}/upload_docs`, formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+
+// Verify property
+export const verifyProperty = (propertyId, data) =>
+  api.put(`/properties/${propertyId}/verify`, data);
+
+// Upload user avatar
+export const uploadUserAvatar = (userId, formData) =>
+  api.post(`/users/${userId}/avatar`, formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+
+// Notification APIs (for future use)
+export const fetchNotifications = () => api.get("/notifications");
+export const markNotificationAsRead = (id) => api.put(`/notifications/${id}/read`);
+export const markAllNotificationsAsRead = () => api.put("/notifications/read-all");
+export const deleteNotification = (id) => api.delete(`/notifications/${id}`);
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\Dashboard.jsx =====
+
+// src/components/Dashboard.jsx
+import React, { useEffect, useState, useCallback } from "react";
+import {
+  Container,
+  Typography,
+  Box,
+  List,
+  ListItem,
+  ListItemText,
+  Alert,
+  Grid,
+  Paper,
+  Card,
+  CardContent,
+  CardHeader,
+  Avatar,
+  IconButton,
+  Chip,
+  Divider,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  CircularProgress
+} from "@mui/material";
+import Sidebar from "./Sidebar";
+import Navbar from "./Navbar";
+import PropertyForm from "./PropertyForm";
+import { fetchUsers, fetchProperties, verifyProperty, deleteProperty } from "../api/api";
+import PersonIcon from '@mui/icons-material/Person';
+import HomeIcon from '@mui/icons-material/Properties';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import VerifiedIcon from '@mui/icons-material/Verified';
+import PendingIcon from '@mui/icons-material/Pending';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import RefreshIcon from '@mui/icons-material/Refresh';
+
+export default function Dashboard({ sidebarOpen, toggleSidebar }) {
+  const [users, setUsers] = useState([]);
+  const [properties, setProperties] = useState([]);
+  const [unverifiedProperties, setUnverifiedProperties] = useState([]);
+  const [role, setRole] = useState("");
+  const [error, setError] = useState("");
+  const [userId, setUserId] = useState(null);
+  const [openVerifyDialog, setOpenVerifyDialog] = useState(false);
+  const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  const fetchPropertiesData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetchProperties();
+      const propertiesData = res.data.properties || [];
+
+      // Filter properties based on user role
+      if (role === "admin") {
+        // Admins see all properties
+        setProperties(propertiesData);
+        setUnverifiedProperties(propertiesData.filter(p => !p.verified));
+      } else if (role === "seller") {
+        // Sellers see only their own properties (both verified and unverified)
+        const sellerProperties = propertiesData.filter(p => p.seller_id === userId);
+        setProperties(sellerProperties);
+      } else {
+        // Regular users see only verified properties
+        const verifiedProperties = propertiesData.filter(p => p.verified);
+        setProperties(verifiedProperties);
+      }
+    } catch (err) {
+      setError("Failed to fetch properties");
+    } finally {
+      setLoading(false);
+    }
+  }, [role, userId]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      window.location.href = "/";
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      const currentTime = Math.floor(Date.now() / 1000); // in seconds
+
+      if (payload.exp < currentTime) {
+        // Token is expired
+        localStorage.removeItem('token');
+        window.location.href = "/";
+        return;
+      }
+
+      // Set role and userId based on backend token format
+      if (!role) {
+        setRole(payload.role);
+      }
+      if (!userId) {
+        // Backend uses 'user_id' in the token payload
+        setUserId(payload.user_id);
+      }
+    } catch (err) {
+      localStorage.removeItem('token');
+      window.location.href = "/";
+    }
+  }, [role, userId]);
+
+  useEffect(() => {
+    if (role && userId) {
+      // Fetch properties
+      fetchPropertiesData();
+
+      // Fetch users if admin
+      if (role === "admin") {
+        setUsersLoading(true);
+        fetchUsers()
+          .then((res) => {
+            setUsers(res.data.users || []);
+            setUsersLoading(false);
+          })
+          .catch(() => {
+            setError("Failed to fetch users");
+            setUsersLoading(false);
+          });
+      }
+    }
+  }, [role, userId, fetchPropertiesData]);
+
+  // Function to handle property creation
+  const handlePropertyCreated = (newProperty) => {
+    // Add the new property to the list
+    if (role === "admin") {
+      setProperties(prev => [...prev, newProperty]);
+      setUnverifiedProperties(prev => [...prev, newProperty]);
+    } else if (role === "seller" && newProperty.seller_id === userId) {
+      setProperties(prev => [...prev, newProperty]);
+    }
+  };
+
+  // Function to verify a property
+  const handleVerifyClick = (property) => {
+    setSelectedProperty(property);
+    setOpenVerifyDialog(true);
+  };
+
+  const handleVerifyConfirm = async () => {
+    try {
+      await verifyProperty(selectedProperty.id, { verified: true });
+
+      // Update the property in the lists
+      setProperties(prev =>
+        prev.map(p =>
+          p.id === selectedProperty.id
+            ? { ...p, verified: true }
+            : p
+        )
+      );
+
+      setUnverifiedProperties(prev =>
+        prev.filter(p => p.id !== selectedProperty.id)
+      );
+
+      setOpenVerifyDialog(false);
+    } catch (err) {
+      console.error('Failed to verify property:', err);
+      setError('Failed to verify property');
+    }
+  };
+
+  const handleVerifyCancel = () => {
+    setOpenVerifyDialog(false);
+  };
+
+  // Function to delete a property
+  const handleDeleteClick = (property) => {
+    setSelectedProperty(property);
+    setOpenDeleteDialog(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    try {
+      await deleteProperty(selectedProperty.id);
+
+      // Remove the property from the lists
+      setProperties(prev => prev.filter(p => p.id !== selectedProperty.id));
+      setUnverifiedProperties(prev => prev.filter(p => p.id !== selectedProperty.id));
+
+      setOpenDeleteDialog(false);
+    } catch (err) {
+      console.error('Failed to delete property:', err);
+      setError('Failed to delete property');
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setOpenDeleteDialog(false);
+  };
+
+  const handleRefresh = () => {
+    fetchPropertiesData();
+  };
+
+  // Check if user can delete a property
+  const canDeleteProperty = (property) => {
+    return role === "admin" || (role === "seller" && property.seller_id === userId);
+  };
+
+  return (
+    <Box sx={{ display: "flex", minHeight: "100vh", background: "#F5F2ED" }}>
+      {/* Sidebar */}
+      <Sidebar open={sidebarOpen} toggleDrawer={toggleSidebar} />
+
+      {/* Main Content */}
+      <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column" }}>
+        <Navbar onMenuClick={toggleSidebar} />
+
+        <Container sx={{ mt: 4, mb: 4, flexGrow: 1 }}>
+          {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+
+          {/* Welcome Section */}
+          <Paper elevation={0} sx={{ p: 3, mb: 4, borderRadius: 2, backgroundColor: 'transparent' }}>
+            <Typography variant="h4" fontWeight={600} color="#2C3E50" gutterBottom>
+              Welcome to Your Dashboard
+            </Typography>
+            <Typography variant="body1" color="#5C6B73">
+              {role === "admin"
+                ? "Manage all properties and users from here. You can verify properties to make them visible to all users."
+                : role === "seller"
+                ? "Manage your properties from here. Your properties will appear once verified by an admin."
+                : "Browse verified properties from here."}
+            </Typography>
+          </Paper>
+
+          {/* Stats Cards */}
+          <Grid container spacing={3} sx={{ mb: 4 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
+                  <Avatar sx={{ bgcolor: '#2C6E49', mr: 2 }}>
+                    <HomeIcon />
+                  </Avatar>
+                  <Box>
+                    <Typography variant="h5" fontWeight={600}>{properties.length}</Typography>
+                    <Typography variant="body2" color="#5C6B73">
+                      {role === "admin" ? "All Properties" : "Your Properties"}
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            <Grid item xs={12} sm={6} md={3}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
+                  <Avatar sx={{ bgcolor: '#D4A373', mr: 2 }}>
+                    <PersonIcon />
+                  </Avatar>
+                  <Box>
+                    <Typography variant="h5" fontWeight={600}>{users.length}</Typography>
+                    <Typography variant="body2" color="#5C6B73">Users</Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {role === "admin" && (
+              <Grid item xs={12} sm={6} md={3}>
+                <Card elevation={2} sx={{ borderRadius: 2 }}>
+                  <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Avatar sx={{ bgcolor: '#F59E0B', mr: 2 }}>
+                      <PendingIcon />
+                    </Avatar>
+                    <Box>
+                      <Typography variant="h5" fontWeight={600}>
+                        {unverifiedProperties.length}
+                      </Typography>
+                      <Typography variant="body2" color="#5C6B73">Pending</Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
+
+            {role === "admin" && (
+              <Grid item xs={12} sm={6} md={3}>
+                <Card elevation={2} sx={{ borderRadius: 2 }}>
+                  <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Avatar sx={{ bgcolor: '#10B981', mr: 2 }}>
+                      <VerifiedIcon />
+                    </Avatar>
+                    <Box>
+                      <Typography variant="h5" fontWeight={600}>
+                        {properties.filter(p => p.verified).length}
+                      </Typography>
+                      <Typography variant="body2" color="#5C6B73">Verified</Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
+          </Grid>
+
+          {/* Unverified Properties (Admin only) */}
+          {role === "admin" && (
+            <Card elevation={2} sx={{ p: 2, mb: 4, borderRadius: 2 }}>
+              <CardHeader
+                title={
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Typography variant="h6" fontWeight={600}>
+                      Properties Awaiting Verification
+                    </Typography>
+                    <Typography variant="body2" color="#5C6B73" sx={{ ml: 2 }}>
+                      ({unverifiedProperties.length} properties)
+                    </Typography>
+                  </Box>
+                }
+                action={
+                  <Box>
+                    <Button
+                      variant="outlined"
+                      startIcon={<RefreshIcon />}
+                      onClick={handleRefresh}
+                      disabled={loading}
+                      sx={{ mr: 1 }}
+                    >
+                      Refresh
+                    </Button>
+                    <IconButton aria-label="settings">
+                      <MoreVertIcon />
+                    </IconButton>
+                  </Box>
+                }
+              />
+              <Divider />
+              <List>
+                {loading ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                    <CircularProgress />
+                  </Box>
+                ) : unverifiedProperties.length > 0 ? (
+                  unverifiedProperties.map((p) => (
+                    <ListItem key={p.id} sx={{ borderBottom: "1px solid rgba(44, 110, 73, 0.12)" }}>
+                      <Avatar sx={{ mr: 2, bgcolor: '#F59E0B' }}>
+                        <HomeIcon />
+                      </Avatar>
+                      <ListItemText
+                        primary={
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            {p.title}
+                            <Chip
+                              icon={<PendingIcon fontSize="small" />}
+                              label="Pending Verification"
+                              size="small"
+                              sx={{
+                                ml: 1,
+                                bgcolor: '#F59E0B',
+                                color: '#FFFFFF',
+                                fontWeight: 500,
+                              }}
+                            />
+                          </Box>
+                        }
+                        secondary={`$${p.price} | Seller ID: ${p.seller_id}`}
+                      />
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        size="small"
+                        startIcon={<CheckCircleIcon />}
+                        onClick={() => handleVerifyClick(p)}
+                        sx={{ mr: 1 }}
+                      >
+                        Verify
+                      </Button>
+                      <IconButton
+                        onClick={() => handleDeleteClick(p)}
+                        disabled={!canDeleteProperty(p)}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </ListItem>
+                  ))
+                ) : (
+                  <ListItem>
+                    <ListItemText
+                      primary="No properties awaiting verification"
+                      secondary="All properties have been verified"
+                    />
+                  </ListItem>
+                )}
+              </List>
+            </Card>
+          )}
+
+          {/* Users (Admin only) */}
+          {role === "admin" && (
+            <Card elevation={2} sx={{ p: 2, mb: 4, borderRadius: 2 }}>
+              <CardHeader
+                title="Users"
+                titleTypographyProps={{ variant: 'h6', fontWeight: 600 }}
+                action={
+                  <IconButton aria-label="settings">
+                    <MoreVertIcon />
+                  </IconButton>
+                }
+              />
+              <Divider />
+              <List>
+                {usersLoading ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                    <CircularProgress />
+                  </Box>
+                ) : users.map((u) => (
+                  <ListItem key={u.id} sx={{ borderBottom: "1px solid rgba(44, 110, 73, 0.12)" }}>
+                    <Avatar sx={{ mr: 2, bgcolor: '#2C6E49' }}>
+                      <PersonIcon />
+                    </Avatar>
+                    <ListItemText
+                      primary={u.username}
+                      secondary={
+                        <Chip
+                          label={u.role}
+                          size="small"
+                          sx={{
+                            bgcolor: u.role === 'admin' ? '#2C6E49' : '#D4A373',
+                            color: '#FFFFFF',
+                            fontWeight: 500,
+                          }}
+                        />
+                      }
+                    />
+                    <IconButton>
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </ListItem>
+                ))}
+              </List>
+            </Card>
+          )}
+
+          {/* Properties */}
+          <Card elevation={2} sx={{ p: 2, mb: 4, borderRadius: 2 }}>
+            <CardHeader
+              title="Properties"
+              titleTypographyProps={{ variant: 'h6', fontWeight: 600 }}
+              action={
+                <Box>
+                  <Button
+                    variant="outlined"
+                    startIcon={<RefreshIcon />}
+                    onClick={handleRefresh}
+                    disabled={loading}
+                    sx={{ mr: 1 }}
+                  >
+                    Refresh
+                  </Button>
+                  <IconButton aria-label="settings">
+                    <MoreVertIcon />
+                  </IconButton>
+                </Box>
+              }
+            />
+            <Divider />
+            <List>
+              {loading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                  <CircularProgress />
+                </Box>
+              ) : properties.length > 0 ? (
+                properties.map((p) => (
+                  <ListItem key={p.id} sx={{ borderBottom: "1px solid rgba(44, 110, 73, 0.12)" }}>
+                    <Avatar sx={{ mr: 2, bgcolor: p.verified ? '#2C6E49' : '#F59E0B' }}>
+                      <HomeIcon />
+                    </Avatar>
+                    <ListItemText
+                      primary={
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          {p.title}
+                          {p.verified ? (
+                            <Chip
+                              icon={<VerifiedIcon fontSize="small" />}
+                              label="Verified"
+                              size="small"
+                              sx={{
+                                ml: 1,
+                                bgcolor: '#10B981',
+                                color: '#FFFFFF',
+                                fontWeight: 500,
+                              }}
+                            />
+                          ) : (
+                            <Chip
+                              icon={<PendingIcon fontSize="small" />}
+                              label="Pending"
+                              size="small"
+                              sx={{
+                                ml: 1,
+                                bgcolor: '#F59E0B',
+                                color: '#FFFFFF',
+                                fontWeight: 500,
+                              }}
+                            />
+                          )}
+                        </Box>
+                      }
+                      secondary={`$${p.price} | Seller ID: ${p.seller_id}`}
+                    />
+                    <IconButton>
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                      onClick={() => handleDeleteClick(p)}
+                      disabled={!canDeleteProperty(p)}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </ListItem>
+                ))
+              ) : (
+                <ListItem>
+                  <ListItemText
+                    primary="No properties found"
+                    secondary={
+                      role === "seller"
+                        ? "Add a new property to get started"
+                        : "No properties available"
+                    }
+                  />
+                </ListItem>
+              )}
+            </List>
+          </Card>
+
+          {/* Property Form (Seller/Admin only) */}
+          {(role === "seller" || role === "admin") && (
+            <Card elevation={2} sx={{ p: 2, borderRadius: 2 }}>
+              <CardHeader
+                title="Add New Property"
+                titleTypographyProps={{ variant: 'h6', fontWeight: 600 }}
+              />
+              <Divider />
+              <Box sx={{ p: 1 }}>
+                <PropertyForm onPropertyCreated={handlePropertyCreated} />
+              </Box>
+            </Card>
+          )}
+        </Container>
+      </Box>
+
+      {/* Verify Confirmation Dialog */}
+      <Dialog
+        open={openVerifyDialog}
+        onClose={handleVerifyCancel}
+        aria-labelledby="verify-dialog-title"
+        aria-describedby="verify-dialog-description"
+      >
+        <DialogTitle id="verify-dialog-title">
+          Verify Property?
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to verify this property? This will make it visible to all users.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleVerifyCancel}>Cancel</Button>
+          <Button onClick={handleVerifyConfirm} color="primary" autoFocus>
+            Verify
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={openDeleteDialog}
+        onClose={handleDeleteCancel}
+        aria-labelledby="delete-dialog-title"
+        aria-describedby="delete-dialog-description"
+      >
+        <DialogTitle id="delete-dialog-title">
+          Delete Property?
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this property? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteCancel}>Cancel</Button>
+          <Button onClick={handleDeleteConfirm} color="error" autoFocus>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\LoginForm.jsx =====
+
+// src/components/LoginForm.jsx
+import React, { useState } from "react";
+import {
+  TextField,
+  Button,
+  Typography,
+  Box,
+  Paper,
+  Divider,
+  InputAdornment,
+  IconButton,
+  Alert
+} from "@mui/material";
+import { Link, useNavigate } from "react-router-dom";
+import { login as apiLogin } from "../api/api";
+import { useAuth } from "../context/AuthContext";
+import PersonIcon from '@mui/icons-material/Person';
+import LockIcon from '@mui/icons-material/Lock';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+
+export default function LoginForm() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const { login } = useAuth();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      console.log("Attempting login with:", { username, password });
+
+      // Create form data
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+
+      const res = await apiLogin(username, password);
+      console.log("Login response:", res);
+
+      if (!res.data || !res.data.token) {
+        throw new Error("No token received from server");
+      }
+
+      const token = res.data.token;
+      console.log("Received token:", token);
+
+      // Use the login function from AuthContext
+      login(token);
+
+      console.log("Login successful, navigating to dashboard");
+      navigate("/dashboard");
+    } catch (err) {
+      console.error("Login error:", err);
+
+      let errorMessage = "Login failed";
+      if (err.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error("Error response:", err.response);
+        if (err.response.status === 415) {
+          errorMessage = "Unsupported Media Type. Please try again.";
+        } else if (err.response.status === 400) {
+          errorMessage = "Bad Request. Please check your credentials.";
+        } else if (err.response.status === 401) {
+          errorMessage = "Invalid username or password.";
+        } else {
+          errorMessage = err.response.data?.error || `Server error: ${err.response.status}`;
+        }
+      } else if (err.request) {
+        // The request was made but no response was received
+        console.error("No response received:", err.request);
+        errorMessage = "No response from server. Check your network connection.";
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error("Request setup error:", err.message);
+        errorMessage = err.message || "An unknown error occurred";
+      }
+
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTogglePasswordVisibility = () => {
+    setShowPassword(!showPassword);
+  };
+
+  return (
+    <Box
+      minHeight="100vh"
+      display="flex"
+      justifyContent="center"
+      alignItems="center"
+      sx={{
+        background: "linear-gradient(135deg, #F5F2ED 0%, #E8E2D8 100%)",
+        p: 2
+      }}
+    >
+      <Paper
+        elevation={6}
+        sx={{
+          p: { xs: 3, md: 5 },
+          borderRadius: 3,
+          width: "100%",
+          maxWidth: 450,
+          boxShadow: '0 10px 30px rgba(44, 110, 73, 0.1)'
+        }}
+      >
+        <Box textAlign="center" mb={4}>
+          <Typography
+            variant="h4"
+            fontWeight={700}
+            color="#2C6E49"
+            gutterBottom
+          >
+            Welcome Back
+          </Typography>
+          <Typography variant="body2" color="#5C6B73">
+            Sign in to continue to your account
+          </Typography>
+        </Box>
+
+        <Divider sx={{ mb: 4 }} />
+
+        {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+
+        <form onSubmit={handleSubmit}>
+          <TextField
+            label="Username"
+            fullWidth
+            margin="normal"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <PersonIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 2,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <TextField
+            label="Password"
+            type={showPassword ? "text" : "password"}
+            fullWidth
+            margin="normal"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <LockIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle password visibility"
+                    onClick={handleTogglePasswordVisibility}
+                    edge="end"
+                  >
+                    {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 3,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+            <Typography variant="body2" color="#5C6B73">
+              Don't have an account?{" "}
+              <Link
+                to="/signup"
+                style={{
+                  color: "#2C6E49",
+                  fontWeight: 500,
+                  textDecoration: 'none',
+                  '&:hover': {
+                    textDecoration: 'underline'
+                  }
+                }}
+              >
+                Sign up
+              </Link>
+            </Typography>
+            <Link
+              to="/forgot-password"
+              style={{
+                color: "#5C6B73",
+                fontSize: '0.875rem',
+                textDecoration: 'none',
+                '&:hover': {
+                  textDecoration: 'underline'
+                }
+              }}
+            >
+              Forgot Password?
+            </Link>
+          </Box>
+
+          <Button
+            variant="contained"
+            color="primary"
+            type="submit"
+            fullWidth
+            disabled={loading}
+            sx={{
+              py: 1.5,
+              borderRadius: 2,
+              fontWeight: 600,
+              fontSize: '1rem',
+              boxShadow: 'none',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(44, 110, 73, 0.3)',
+              }
+            }}
+          >
+            {loading ? 'Signing In...' : 'Sign In'}
+          </Button>
+        </form>
+
+        <Box mt={4} textAlign="center">
+          <Typography variant="body2" color="#5C6B73">
+            By signing in, you agree to our{" "}
+            <Link
+              to="/terms"
+              style={{
+                color: "#2C6E49",
+                textDecoration: 'none',
+                '&:hover': {
+                  textDecoration: 'underline'
+                }
+              }}
+            >
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link
+              to="/privacy"
+              style={{
+                color: "#2C6E49",
+                textDecoration: 'none',
+                '&:hover': {
+                  textDecoration: 'underline'
+                }
+              }}
+            >
+              Privacy Policy
+            </Link>
+          </Typography>
+        </Box>
+      </Paper>
+    </Box>
+  );
+}
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\Navbar.jsx =====
+
+// src/components/Navbar.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  Button,
+  Box,
+  IconButton,
+  Menu,
+  MenuItem,
+  Avatar,
+  Badge
+} from '@mui/material';
+import { Link, useNavigate } from 'react-router-dom';
+import MenuIcon from '@mui/icons-material/Menu';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+
+const Navbar = ({ onMenuClick }) => {
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userRole, setUserRole] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  // Function to check authentication status
+  const checkAuthStatus = () => {
+    const token = localStorage.getItem('token');
+
+    // If no token, user is not logged in
+    if (!token) {
+      setIsLoggedIn(false);
+      setUserRole(null);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // Parse the token to check if it's valid
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const currentTime = Math.floor(Date.now() / 1000); // in seconds
+
+      // Check if token is expired
+      if (payload.exp < currentTime) {
+        // Token is expired, remove it
+        localStorage.removeItem('token');
+        setIsLoggedIn(false);
+        setUserRole(null);
+        setLoading(false);
+        return;
+      }
+
+      // Token is valid, user is logged in
+      setIsLoggedIn(true);
+      setUserRole(payload.role);
+      setLoading(false);
+    } catch (err) {
+      // Invalid token, remove it
+      localStorage.removeItem('token');
+      setIsLoggedIn(false);
+      setUserRole(null);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // Check auth status on mount
+    checkAuthStatus();
+
+    // Set up an interval to check auth status periodically
+    const interval = setInterval(checkAuthStatus, 60000); // Check every minute
+
+    // Clean up interval on unmount
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleMenu = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setIsLoggedIn(false);
+    setUserRole(null);
+    navigate('/');
+    handleClose();
+  };
+
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <AppBar position="sticky" elevation={1} sx={{ background: '#FFFFFF', color: '#2C3E50' }}>
+        <Toolbar sx={{ justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <IconButton
+              color="inherit"
+              aria-label="open drawer"
+              edge="start"
+              onClick={onMenuClick}
+              sx={{ mr: 2, display: { md: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography
+              variant="h6"
+              component={Link}
+              to="/"
+              sx={{
+                textDecoration: 'none',
+                color: 'inherit',
+                fontWeight: 600,
+                letterSpacing: '-0.5px',
+              }}
+            >
+              LandState
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            {/* Loading state - could add a spinner here if needed */}
+          </Box>
+        </Toolbar>
+      </AppBar>
+    );
+  }
+
+  return (
+    <AppBar position="sticky" elevation={1} sx={{ background: '#FFFFFF', color: '#2C3E50' }}>
+      <Toolbar sx={{ justifyContent: 'space-between' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <IconButton
+            color="inherit"
+            aria-label="open drawer"
+            edge="start"
+            onClick={onMenuClick}
+            sx={{ mr: 2, display: { md: 'none' } }}
+          >
+            <MenuIcon />
+          </IconButton>
+
+          {/* Logo added here */}
+          <Box
+            component="img"
+            src="/logo.png"  // This will look in the public folder
+            alt="LandState Logo"
+            sx={{
+              height: 40,
+              mr: 1.5,
+              display: { xs: 'none', sm: 'block' } // Hide on very small screens
+            }}
+          />
+
+          <Typography
+            variant="h6"
+            component={Link}
+            to="/"
+            sx={{
+              textDecoration: 'none',
+              color: 'inherit',
+              fontWeight: 600,
+              letterSpacing: '-0.5px',
+              '&:hover': {
+                color: '#2C6E49'
+              }
+            }}
+          >
+            LandState
+          </Typography>
+        </Box>
+
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {isLoggedIn ? (
+            <>
+              {/* Only show notifications for logged-in users */}
+              <IconButton color="inherit" sx={{ mr: 1 }}>
+                <Badge badgeContent={3} color="secondary">
+                  <NotificationsIcon />
+                </Badge>
+              </IconButton>
+              <IconButton
+                size="large"
+                aria-label="account of current user"
+                aria-controls="menu-appbar"
+                aria-haspopup="true"
+                onClick={handleMenu}
+                color="inherit"
+              >
+                <Avatar sx={{ width: 32, height: 32, bgcolor: '#2C6E49' }}>
+                  <AccountCircleIcon />
+                </Avatar>
+              </IconButton>
+              <Menu
+                id="menu-appbar"
+                anchorEl={anchorEl}
+                anchorOrigin={{
+                  vertical: 'top',
+                  horizontal: 'right',
+                }}
+                keepMounted
+                transformOrigin={{
+                  vertical: 'top',
+                  horizontal: 'right',
+                }}
+                open={Boolean(anchorEl)}
+                onClose={handleClose}
+                sx={{ mt: 1.5 }}
+              >
+                <MenuItem onClick={handleClose} component={Link} to="/profile">
+                  <Typography textAlign="center">Profile</Typography>
+                </MenuItem>
+                <MenuItem onClick={handleClose} component={Link} to="/settings">
+                  <Typography textAlign="center">Settings</Typography>
+                </MenuItem>
+                <MenuItem onClick={handleLogout}>
+                  <Typography textAlign="center">Logout</Typography>
+                </MenuItem>
+              </Menu>
+            </>
+          ) : (
+            <Box sx={{ display: 'flex' }}>
+              <Button
+                color="inherit"
+                component={Link}
+                to="/login"
+                sx={{
+                  mr: 1,
+                  fontWeight: 500,
+                  '&:hover': {
+                    backgroundColor: 'rgba(44, 110, 73, 0.08)'
+                  }
+                }}
+              >
+                Login
+              </Button>
+              <Button
+                variant="contained"
+                color="primary"
+                component={Link}
+                to="/signup"
+                sx={{
+                  fontWeight: 500,
+                  boxShadow: 'none',
+                  '&:hover': {
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                  }
+                }}
+              >
+                Sign Up
+              </Button>
+            </Box>
+          )}
+        </Box>
+      </Toolbar>
+    </AppBar>
+  );
+};
+
+export default Navbar;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\Notifications.jsx =====
+
+// src/components/Notifications.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  Container,
+  Typography,
+  Box,
+  Paper,
+  List,
+  ListItem,
+  ListItemAvatar,
+  ListItemText,
+  ListItemSecondaryAction,
+  IconButton,
+  Badge,
+  Avatar,
+  Chip,
+  Divider,
+  Alert,
+  Button,
+} from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import HomeIcon from '@mui/icons-material/Properties';
+import PersonIcon from '@mui/icons-material/Person';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import InfoIcon from '@mui/icons-material/Info';
+import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
+import DeleteIcon from '@mui/icons-material/Delete';
+
+const Notifications = () => {
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const currentTime = Math.floor(Date.now() / 1000);
+
+      if (payload.exp < currentTime) {
+        localStorage.removeItem('token');
+        navigate('/');
+        return;
+      }
+
+      // Mock notifications - in a real app, you would fetch from API
+      const mockNotifications = [
+        {
+          id: 1,
+          title: 'Property Verified',
+          message: 'Your property "Modern Apartment" has been verified and is now visible to all users.',
+          type: 'success',
+          read: false,
+          timestamp: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
+        },
+        {
+          id: 2,
+          title: 'New Inquiry',
+          message: 'You have a new inquiry for your property "Downtown Loft".',
+          type: 'info',
+          read: false,
+          timestamp: new Date(Date.now() - 7200000).toISOString(), // 2 hours ago
+        },
+        {
+          id: 3,
+          title: 'Payment Received',
+          message: 'Payment for your premium listing has been received.',
+          type: 'success',
+          read: true,
+          timestamp: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
+        },
+        {
+          id: 4,
+          title: 'Maintenance Notice',
+          message: 'Scheduled maintenance will occur on Sunday, 2:00 AM - 4:00 AM EST.',
+          type: 'warning',
+          read: true,
+          timestamp: new Date(Date.now() - 172800000).toISOString(), // 2 days ago
+        },
+        {
+          id: 5,
+          title: 'Welcome to LandState',
+          message: 'Thank you for joining our platform! Get started by creating your first property listing.',
+          type: 'info',
+          read: true,
+          timestamp: new Date(Date.now() - 604800000).toISOString(), // 1 week ago
+        },
+      ];
+
+      setNotifications(mockNotifications);
+      setLoading(false);
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/');
+    }
+  }, [navigate]);
+
+  const handleMarkAsRead = (id) => {
+    setNotifications(notifications.map(notification =>
+      notification.id === id ? { ...notification, read: true } : notification
+    ));
+  };
+
+  const handleMarkAllAsRead = () => {
+    setNotifications(notifications.map(notification => ({ ...notification, read: true })));
+  };
+
+  const handleDelete = (id) => {
+    setNotifications(notifications.filter(notification => notification.id !== id));
+  };
+
+  const handleClearAll = () => {
+    setNotifications([]);
+  };
+
+  const getNotificationIcon = (type) => {
+    switch (type) {
+      case 'success':
+        return <CheckCircleIcon sx={{ color: '#10B981' }} />;
+      case 'error':
+        return <ErrorIcon sx={{ color: '#EF4444' }} />;
+      case 'warning':
+        return <InfoIcon sx={{ color: '#F59E0B' }} />;
+      default:
+        return <InfoIcon sx={{ color: '#3B82F6' }} />;
+    }
+  };
+
+  const formatTime = (timestamp) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffInSeconds = Math.floor((now - date) / 1000);
+
+    if (diffInSeconds < 60) {
+      return 'Just now';
+    } else if (diffInSeconds < 3600) {
+      return `${Math.floor(diffInSeconds / 60)} minutes ago`;
+    } else if (diffInSeconds < 86400) {
+      return `${Math.floor(diffInSeconds / 3600)} hours ago`;
+    } else {
+      return date.toLocaleDateString();
+    }
+  };
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading notifications...</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Container sx={{ py: 4 }}>
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+
+      <Paper elevation={3} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Box sx={{ p: 3, backgroundColor: '#2C6E49', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Typography variant="h4" fontWeight={600}>
+            Notifications
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Badge badgeContent={unreadCount} color="secondary">
+              <NotificationsIcon />
+            </Badge>
+            {unreadCount > 0 && (
+              <Button
+                variant="outlined"
+                color="inherit"
+                size="small"
+                sx={{ ml: 2 }}
+                onClick={handleMarkAllAsRead}
+              >
+                Mark all as read
+              </Button>
+            )}
+          </Box>
+        </Box>
+
+        {notifications.length === 0 ? (
+          <Box sx={{ p: 4, textAlign: 'center' }}>
+            <NotificationsIcon sx={{ fontSize: 64, color: '#D1D5DB', mb: 2 }} />
+            <Typography variant="h6" color="#5C6B73">
+              No notifications
+            </Typography>
+            <Typography variant="body2" color="#5C6B73">
+              You're all caught up! Check back later for updates.
+            </Typography>
+          </Box>
+        ) : (
+          <List>
+            {notifications.map((notification) => (
+              <React.Fragment key={notification.id}>
+                <ListItem
+                  alignItems="flex-start"
+                  sx={{
+                    backgroundColor: notification.read ? 'transparent' : 'rgba(44, 110, 73, 0.05)',
+                    '&:hover': { backgroundColor: 'rgba(44, 110, 73, 0.08)' },
+                  }}
+                >
+                  <ListItemAvatar>
+                    <Avatar sx={{ bgcolor: notification.read ? '#E5E7EB' : '#2C6E49' }}>
+                      {getNotificationIcon(notification.type)}
+                    </Avatar>
+                  </ListItemAvatar>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Typography
+                          variant="body1"
+                          fontWeight={notification.read ? 400 : 600}
+                          color={notification.read ? '#2C3E50' : '#2C6E49'}
+                        >
+                          {notification.title}
+                        </Typography>
+                        {!notification.read && (
+                          <Chip
+                            label="New"
+                            size="small"
+                            sx={{ ml: 1, height: 20, fontSize: '0.75rem' }}
+                          />
+                        )}
+                      </Box>
+                    }
+                    secondary={
+                      <Typography
+                        variant="body2"
+                        color={notification.read ? '#5C6B73' : '#2C6E49'}
+                      >
+                        {notification.message}
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          display="block"
+                          sx={{ mt: 0.5 }}
+                        >
+                          {formatTime(notification.timestamp)}
+                        </Typography>
+                      </Typography>
+                    }
+                  />
+                  <ListItemSecondaryAction>
+                    {!notification.read && (
+                      <IconButton
+                        edge="end"
+                        onClick={() => handleMarkAsRead(notification.id)}
+                        sx={{ mr: 1 }}
+                      >
+                        <MarkEmailReadIcon />
+                      </IconButton>
+                    )}
+                    <IconButton
+                      edge="end"
+                      onClick={() => handleDelete(notification.id)}
+                    >
+                      <DeleteIcon />
+                    </IconButton>
+                  </ListItemSecondaryAction>
+                </ListItem>
+                <Divider variant="inset" component="li" />
+              </React.Fragment>
+            ))}
+          </List>
+        )}
+
+        {notifications.length > 0 && (
+          <Box sx={{ p: 2, display: 'flex', justifyContent: 'center' }}>
+            <Button
+              variant="outlined"
+              color="error"
+              onClick={handleClearAll}
+            >
+              Clear All Notifications
+            </Button>
+          </Box>
+        )}
+      </Paper>
+    </Container>
+  );
+};
+
+export default Notifications;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\PropertyDetail.jsx =====
+
+// src/components/PropertyDetail.jsx
+import React, { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import {
+  Box,
+  Paper,
+  Grid,
+  Typography,
+  Button,
+  IconButton,
+  Chip,
+  Divider,
+  Card,
+  CardMedia,
+  CardContent,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Avatar,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Alert,
+  Breadcrumbs,
+  Link as MuiLink
+} from '@mui/material';
+import { Link } from 'react-router-dom';
+import {
+  LocationOn,
+  Bed,
+  Bathtub,
+  SquareFoot,
+  Edit,
+  Delete,
+  Favorite,
+  Share,
+  ArrowBack,
+  Properties,
+  Phone,
+  Email,
+  CalendarToday
+} from '@mui/icons-material';
+import { fetchProperties, deleteProperty } from '../api/api';
+
+const PropertyDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [property, setProperty] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+  const [userRole, setUserRole] = useState('');
+
+  useEffect(() => {
+    const fetchPropertyDetails = async () => {
+      try {
+        // In a real app, you would have an API endpoint to get a single property
+        // For now, we'll simulate it by filtering from all properties
+        const res = await fetchProperties();
+        const properties = res.data.properties || [];
+        const foundProperty = properties.find(p => p.id === parseInt(id));
+
+        if (foundProperty) {
+          setProperty(foundProperty);
+        } else {
+          setError('Property not found');
+        }
+        setLoading(false);
+      } catch (err) {
+        console.error('Failed to fetch property details:', err);
+        setError('Failed to load property details');
+        setLoading(false);
+      }
+    };
+
+    // Get user role from token
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        setUserRole(payload.role);
+      } catch (err) {
+        console.error('Error decoding token:', err);
+      }
+    }
+
+    fetchPropertyDetails();
+  }, [id]);
+
+  const handleDeleteClick = () => {
+    setOpenDeleteDialog(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    try {
+      await deleteProperty(id);
+      navigate('/properties');
+    } catch (err) {
+      console.error('Failed to delete property:', err);
+      setError('Failed to delete property');
+      setOpenDeleteDialog(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setOpenDeleteDialog(false);
+  };
+
+  const handleEditClick = () => {
+    navigate(`/properties/${id}/edit`);
+  };
+
+  const isOwner = property && userRole === 'seller' && property.seller_id === userRole;
+  const canEdit = isOwner || userRole === 'admin';
+  const canDelete = isOwner || userRole === 'admin';
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading property details...</Typography>
+      </Box>
+    );
+  }
+
+  if (error || !property) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">{error || 'Property not found'}</Alert>
+        <Button
+          variant="contained"
+          sx={{ mt: 2 }}
+          onClick={() => navigate('/properties')}
+        >
+          Back to Properties
+        </Button>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: { xs: 2, md: 3 } }}>
+      {/* Breadcrumbs */}
+      <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 3 }}>
+        <MuiLink component={Link} to="/dashboard" color="inherit">
+          Dashboard
+        </MuiLink>
+        <MuiLink component={Link} to="/properties" color="inherit">
+          Properties
+        </MuiLink>
+        <Typography color="#2C6E49">{property.title}</Typography>
+      </Breadcrumbs>
+
+      {/* Back Button */}
+      <Button
+        variant="outlined"
+        startIcon={<ArrowBack />}
+        onClick={() => navigate('/properties')}
+        sx={{ mb: 3, borderRadius: 2 }}
+      >
+        Back to Properties
+      </Button>
+
+      {/* Property Header */}
+      <Paper elevation={3} sx={{ p: 3, mb: 4, borderRadius: 2 }}>
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={8}>
+            <Typography variant="h4" fontWeight={600} color="#2C3E50" gutterBottom>
+              {property.title}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <LocationOn fontSize="small" sx={{ color: '#5C6B73', mr: 0.5 }} />
+              <Typography variant="body1" color="#5C6B73">
+                {property.location || 'Location not specified'}
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h5" fontWeight={600} color="#2C6E49">
+                ${property.price ? property.price.toLocaleString() : 'Price on request'}
+              </Typography>
+              <Chip
+                label={property.propertyType || 'Property'}
+                size="small"
+                sx={{
+                  ml: 2,
+                  bgcolor: '#E8E2D8',
+                  color: '#2C6E49',
+                  fontWeight: 500,
+                }}
+              />
+            </Box>
+          </Grid>
+          <Grid item xs={12} md={4} sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start' }}>
+            <Box>
+              <IconButton sx={{ color: '#D4A373', mr: 1 }}>
+                <Favorite />
+              </IconButton>
+              <IconButton sx={{ color: '#5C6B73' }}>
+                <Share />
+              </IconButton>
+              {canEdit && (
+                <IconButton sx={{ color: '#2C6E49', mr: 1 }} onClick={handleEditClick}>
+                  <Edit />
+                </IconButton>
+              )}
+              {canDelete && (
+                <IconButton sx={{ color: '#d32f2f' }} onClick={handleDeleteClick}>
+                  <Delete />
+                </IconButton>
+              )}
+            </Box>
+          </Grid>
+        </Grid>
+      </Paper>
+
+      {/* Property Images */}
+      <Paper elevation={3} sx={{ p: 3, mb: 4, borderRadius: 2 }}>
+        <Typography variant="h5" fontWeight={600} color="#2C3E50" gutterBottom>
+          Property Images
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12}>
+            <Card sx={{ borderRadius: 2, overflow: 'hidden' }}>
+              <CardMedia
+                component="div"
+                sx={{
+                  height: 400,
+                  backgroundImage: property.image
+                    ? `url(${property.image})`
+                    : 'linear-gradient(135deg, #E8E2D8 0%, #D4A373 100%)',
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                }}
+              />
+            </Card>
+          </Grid>
+        </Grid>
+      </Paper>
+
+      {/* Property Details */}
+      <Grid container spacing={3}>
+        <Grid item xs={12} md={8}>
+          <Paper elevation={3} sx={{ p: 3, borderRadius: 2 }}>
+            <Typography variant="h5" fontWeight={600} color="#2C3E50" gutterBottom>
+              Property Details
+            </Typography>
+            <Divider sx={{ mb: 3 }} />
+            <Typography variant="body1" color="#5C6B73" paragraph>
+              {property.description || 'No description available'}
+            </Typography>
+
+            <Grid container spacing={2} sx={{ mt: 2 }}>
+              <Grid item xs={6} sm={3}>
+                <Card elevation={1} sx={{ p: 2, textAlign: 'center', borderRadius: 2 }}>
+                  <Bed sx={{ fontSize: 30, color: '#2C6E49', mb: 1 }} />
+                  <Typography variant="h6" fontWeight={600}>{property.bedrooms || '0'}</Typography>
+                  <Typography variant="body2" color="#5C6B73">Bedrooms</Typography>
+                </Card>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Card elevation={1} sx={{ p: 2, textAlign: 'center', borderRadius: 2 }}>
+                  <Bathtub sx={{ fontSize: 30, color: '#2C6E49', mb: 1 }} />
+                  <Typography variant="h6" fontWeight={600}>{property.bathrooms || '0'}</Typography>
+                  <Typography variant="body2" color="#5C6B73">Bathrooms</Typography>
+                </Card>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Card elevation={1} sx={{ p: 2, textAlign: 'center', borderRadius: 2 }}>
+                  <SquareFoot sx={{ fontSize: 30, color: '#2C6E49', mb: 1 }} />
+                  <Typography variant="h6" fontWeight={600}>{property.area || '0'}</Typography>
+                  <Typography variant="body2" color="#5C6B73">Square Feet</Typography>
+                </Card>
+              </Grid>
+              <Grid item xs={6} sm={3}>
+                <Card elevation={1} sx={{ p: 2, textAlign: 'center', borderRadius: 2 }}>
+                  <Properties sx={{ fontSize: 30, color: '#2C6E49', mb: 1 }} />
+                  <Typography variant="h6" fontWeight={600}>{property.propertyType || 'N/A'}</Typography>
+                  <Typography variant="body2" color="#5C6B73">Property Type</Typography>
+                </Card>
+              </Grid>
+            </Grid>
+          </Paper>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <Paper elevation={3} sx={{ p: 3, borderRadius: 2 }}>
+            <Typography variant="h5" fontWeight={600} color="#2C3E50" gutterBottom>
+              Contact Information
+            </Typography>
+            <Divider sx={{ mb: 3 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <Avatar sx={{ bgcolor: '#2C6E49', mr: 2 }}>
+                {property.seller_name ? property.seller_name.charAt(0) : 'S'}
+              </Avatar>
+              <Box>
+                <Typography variant="h6" fontWeight={500}>
+                  {property.seller_name || 'Seller Name'}
+                </Typography>
+                <Typography variant="body2" color="#5C6B73">
+                  {property.seller_role || 'Property Owner'}
+                </Typography>
+              </Box>
+            </Box>
+
+            <List>
+              <ListItem disablePadding sx={{ mb: 1 }}>
+                <ListItemIcon sx={{ minWidth: 36, color: '#5C6B73' }}>
+                  <Phone fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary={property.seller_phone || 'Phone not available'} />
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 1 }}>
+                <ListItemIcon sx={{ minWidth: 36, color: '#5C6B73' }}>
+                  <Email fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary={property.seller_email || 'Email not available'} />
+              </ListItem>
+              <ListItem disablePadding>
+                <ListItemIcon sx={{ minWidth: 36, color: '#5C6B73' }}>
+                  <CalendarToday fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                  primary={`Listed on ${property.created_at ? new Date(property.created_at).toLocaleDateString() : 'Date not available'}`}
+                />
+              </ListItem>
+            </List>
+
+            <Button
+              variant="contained"
+              fullWidth
+              sx={{
+                mt: 2,
+                py: 1.5,
+                borderRadius: 2,
+                fontWeight: 500,
+              }}
+            >
+              Contact Seller
+            </Button>
+          </Paper>
+        </Grid>
+      </Grid>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={openDeleteDialog}
+        onClose={handleDeleteCancel}
+        aria-labelledby="alert-dialog-title"
+        aria-describedby="alert-dialog-description"
+      >
+        <DialogTitle id="alert-dialog-title">
+          {"Delete Property?"}
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this property? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteCancel}>Cancel</Button>
+          <Button onClick={handleDeleteConfirm} color="error" autoFocus>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+};
+
+export default PropertyDetail;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\PropertyEdit.jsx =====
+
+// src/components/PropertyEdit.jsx
+import React, { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import {
+  TextField,
+  Button,
+  Box,
+  Typography,
+  Alert,
+  Grid,
+  Card,
+  CardContent,
+  IconButton,
+  InputAdornment,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Breadcrumbs,
+  Link as MuiLink
+} from '@mui/material';
+import { Link } from 'react-router-dom';
+import { fetchProperties, updateProperty, uploadPropertyImage } from '../api/api';
+import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import DescriptionIcon from '@mui/icons-material/Description';
+import TitleIcon from '@mui/icons-material/Title';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
+import HomeIcon from '@mui/icons-material/Properties';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+
+const PropertyEdit = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    price: '',
+    location: '',
+    propertyType: '',
+    bedrooms: '',
+    bathrooms: ''
+  });
+  const [file, setFile] = useState(null);
+  const [existingImage, setExistingImage] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchPropertyDetails = async () => {
+      try {
+        const res = await fetchProperties();
+        const properties = res.data.properties || [];
+        const foundProperty = properties.find(p => p.id === parseInt(id));
+
+        if (foundProperty) {
+          setForm({
+            title: foundProperty.title || '',
+            description: foundProperty.description || '',
+            price: foundProperty.price || '',
+            location: foundProperty.location || '',
+            propertyType: foundProperty.propertyType || '',
+            bedrooms: foundProperty.bedrooms || '',
+            bathrooms: foundProperty.bathrooms || ''
+          });
+          setExistingImage(foundProperty.image || '');
+        } else {
+          setError('Property not found');
+        }
+        setLoading(false);
+      } catch (err) {
+        console.error('Failed to fetch property details:', err);
+        setError('Failed to load property details');
+        setLoading(false);
+      }
+    };
+
+    fetchPropertyDetails();
+  }, [id]);
+
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleFileChange = (e) => setFile(e.target.files[0]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (!form.title || !form.price) {
+      setError('Title and Price are required.');
+      return;
+    }
+
+    try {
+      // Update property details
+      await updateProperty(id, form);
+
+      // Upload new image if selected
+      if (file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        await uploadPropertyImage(id, formData);
+      }
+
+      setSuccess('Property updated successfully!');
+      // Navigate to property detail page after a short delay
+      setTimeout(() => {
+        navigate(`/properties/${id}`);
+      }, 1500);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update property');
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading property details...</Typography>
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">{error}</Alert>
+        <Button
+          variant="contained"
+          sx={{ mt: 2 }}
+          onClick={() => navigate(`/properties/${id}`)}
+        >
+          Back to Property
+        </Button>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: { xs: 2, md: 3 } }}>
+      {/* Breadcrumbs */}
+      <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 3 }}>
+        <MuiLink component={Link} to="/dashboard" color="inherit">
+          Dashboard
+        </MuiLink>
+        <MuiLink component={Link} to="/properties" color="inherit">
+          Properties
+        </MuiLink>
+        <MuiLink component={Link} to={`/properties/${id}`} color="inherit">
+          {form.title}
+        </MuiLink>
+        <Typography color="#2C6E49">Edit Property</Typography>
+      </Breadcrumbs>
+
+      {/* Back Button */}
+      <Button
+        variant="outlined"
+        startIcon={<ArrowBackIcon />}
+        onClick={() => navigate(`/properties/${id}`)}
+        sx={{ mb: 3, borderRadius: 2 }}
+      >
+        Back to Property
+      </Button>
+
+      <Card elevation={2} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <CardContent sx={{ p: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <HomeIcon sx={{ color: '#2C6E49', mr: 1.5 }} />
+            <Typography variant="h6" fontWeight={600} color="#2C3E50">
+              Edit Property
+            </Typography>
+          </Box>
+
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
+
+          <form onSubmit={handleSubmit}>
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Property Title"
+                  name="title"
+                  fullWidth
+                  margin="normal"
+                  value={form.title}
+                  onChange={handleChange}
+                  required
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <TitleIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Price"
+                  name="price"
+                  fullWidth
+                  margin="normal"
+                  type="number"
+                  value={form.price}
+                  onChange={handleChange}
+                  required
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AttachMoneyIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Location"
+                  name="location"
+                  fullWidth
+                  margin="normal"
+                  value={form.location}
+                  onChange={handleChange}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <LocationOnIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth margin="normal" sx={{ mt: 1 }}>
+                  <InputLabel id="property-type-label">Property Type</InputLabel>
+                  <Select
+                    labelId="property-type-label"
+                    name="propertyType"
+                    value={form.propertyType}
+                    onChange={handleChange}
+                    label="Property Type"
+                    sx={{ borderRadius: 2 }}
+                  >
+                    <MenuItem value="house">House</MenuItem>
+                    <MenuItem value="apartment">Apartment</MenuItem>
+                    <MenuItem value="condo">Condo</MenuItem>
+                    <MenuItem value="land">Land</MenuItem>
+                    <MenuItem value="commercial">Commercial</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Bedrooms"
+                  name="bedrooms"
+                  fullWidth
+                  margin="normal"
+                  type="number"
+                  value={form.bedrooms}
+                  onChange={handleChange}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <HomeIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="Bathrooms"
+                  name="bathrooms"
+                  fullWidth
+                  margin="normal"
+                  type="number"
+                  value={form.bathrooms}
+                  onChange={handleChange}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <HomeIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12}>
+                <TextField
+                  label="Description"
+                  name="description"
+                  fullWidth
+                  margin="normal"
+                  multiline
+                  rows={4}
+                  value={form.description}
+                  onChange={handleChange}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start" sx={{ alignSelf: 'flex-start', mt: 1.5 }}>
+                        <DescriptionIcon sx={{ color: '#5C6B73' }} />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      borderRadius: 2,
+                    },
+                  }}
+                />
+              </Grid>
+
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
+                  <IconButton
+                    color="primary"
+                    aria-label="upload picture"
+                    component="label"
+                    sx={{
+                      border: '2px dashed #2C6E49',
+                      borderRadius: 2,
+                      p: 2,
+                      mr: 2,
+                      '&:hover': {
+                        backgroundColor: 'rgba(44, 110, 73, 0.04)',
+                      }
+                    }}
+                  >
+                    <input
+                      hidden
+                      accept="image/*"
+                      type="file"
+                      onChange={handleFileChange}
+                    />
+                    <AddPhotoAlternateIcon fontSize="large" sx={{ color: '#2C6E49' }} />
+                  </IconButton>
+                  <Box>
+                    <Typography variant="body1" fontWeight={500}>
+                      {file ? file.name : (existingImage ? 'Change Property Image' : 'Upload Property Image')}
+                    </Typography>
+                    <Typography variant="body2" color="#5C6B73">
+                      {file ? 'New image selected' : (existingImage ? 'Current image will be replaced' : 'JPG, PNG up to 5MB')}
+                    </Typography>
+                  </Box>
+                </Box>
+
+                {existingImage && !file && (
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="body2" color="#5C6B73" gutterBottom>
+                      Current Image:
+                    </Typography>
+                    <Box
+                      component="img"
+                      src={existingImage}
+                      alt="Current property"
+                      sx={{
+                        height: 150,
+                        borderRadius: 1,
+                        objectFit: 'cover',
+                      }}
+                    />
+                  </Box>
+                )}
+              </Grid>
+
+              <Grid item xs={12}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  type="submit"
+                  fullWidth
+                  sx={{
+                    mt: 2,
+                    py: 1.5,
+                    borderRadius: 2,
+                    fontWeight: 500,
+                    boxShadow: 'none',
+                    '&:hover': {
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+                    }
+                  }}
+                >
+                  Update Property
+                </Button>
+              </Grid>
+            </Grid>
+          </form>
+        </CardContent>
+      </Card>
+    </Box>
+  );
+};
+
+export default PropertyEdit;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\PropertyForm.jsx =====
+
+// src/components/PropertyForm.jsx
+import React, { useState } from "react";
+import {
+  TextField,
+  Button,
+  Box,
+  Grid,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Divider,
+  Alert
+} from "@mui/material";
+import { createProperty } from "../api/api";
+
+export default function PropertyForm({ onPropertyCreated }) {
+  const [formData, setFormData] = useState({
+    title: "",
+    description: "",
+    price: "",
+    location: "",
+    propertyType: "",
+    bedrooms: "",
+    bathrooms: "",
+    area: ""
+  });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    setSuccess(false);
+
+    try {
+      // Convert string numbers to actual numbers
+      const propertyData = {
+        ...formData,
+        price: parseFloat(formData.price),
+        bedrooms: parseInt(formData.bedrooms) || 0,
+        bathrooms: parseInt(formData.bathrooms) || 0,
+        area: parseInt(formData.area) || 0
+      };
+
+      const response = await createProperty(propertyData);
+
+      if (response.data) {
+        // Reset form
+        setFormData({
+          title: "",
+          description: "",
+          price: "",
+          location: "",
+          propertyType: "",
+          bedrooms: "",
+          bathrooms: "",
+          area: ""
+        });
+
+        setSuccess(true);
+
+        // Notify parent component
+        onPropertyCreated(response.data);
+      }
+    } catch (err) {
+      console.error("Error creating property:", err);
+      setError(err.response?.data?.error || "Failed to create property");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box component="form" onSubmit={handleSubmit}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      {success && (
+        <Alert severity="success" sx={{ mb: 2 }}>
+          Property created successfully!
+        </Alert>
+      )}
+
+      <Grid container spacing={2}>
+        <Grid item xs={12}>
+          <TextField
+            name="title"
+            label="Property Title"
+            fullWidth
+            value={formData.title}
+            onChange={handleChange}
+            required
+            helperText="Enter a descriptive title for your property"
+          />
+        </Grid>
+
+        <Grid item xs={12}>
+          <TextField
+            name="description"
+            label="Description"
+            fullWidth
+            multiline
+            rows={3}
+            value={formData.description}
+            onChange={handleChange}
+            helperText="Provide details about the property"
+          />
+        </Grid>
+
+        <Grid item xs={12} sm={6}>
+          <TextField
+            name="price"
+            label="Price ($)"
+            type="number"
+            fullWidth
+            value={formData.price}
+            onChange={handleChange}
+            required
+            inputProps={{ min: 0, step: "0.01" }}
+            helperText="Enter the asking price"
+          />
+        </Grid>
+
+        <Grid item xs={12} sm={6}>
+          <FormControl fullWidth>
+            <InputLabel>Property Type</InputLabel>
+            <Select
+              name="propertyType"
+              value={formData.propertyType}
+              onChange={handleChange}
+              label="Property Type"
+            >
+              <MenuItem value="house">House</MenuItem>
+              <MenuItem value="apartment">Apartment</MenuItem>
+              <MenuItem value="condo">Condo</MenuItem>
+              <MenuItem value="land">Land</MenuItem>
+              <MenuItem value="commercial">Commercial</MenuItem>
+            </Select>
+          </FormControl>
+        </Grid>
+
+        <Grid item xs={12}>
+          <TextField
+            name="location"
+            label="Location"
+            fullWidth
+            value={formData.location}
+            onChange={handleChange}
+            helperText="City, State or full address"
+          />
+        </Grid>
+
+        <Grid item xs={12} sm={4}>
+          <TextField
+            name="bedrooms"
+            label="Bedrooms"
+            type="number"
+            fullWidth
+            value={formData.bedrooms}
+            onChange={handleChange}
+            inputProps={{ min: 0 }}
+            helperText="Number of bedrooms"
+          />
+        </Grid>
+
+        <Grid item xs={12} sm={4}>
+          <TextField
+            name="bathrooms"
+            label="Bathrooms"
+            type="number"
+            fullWidth
+            value={formData.bathrooms}
+            onChange={handleChange}
+            inputProps={{ min: 0 }}
+            helperText="Number of bathrooms"
+          />
+        </Grid>
+
+        <Grid item xs={12} sm={4}>
+          <TextField
+            name="area"
+            label="Area (sq ft)"
+            type="number"
+            fullWidth
+            value={formData.area}
+            onChange={handleChange}
+            inputProps={{ min: 0 }}
+            helperText="Property size in square feet"
+          />
+        </Grid>
+
+        <Grid item xs={12}>
+          <Divider sx={{ my: 2 }} />
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={loading}
+            fullWidth
+            sx={{ py: 1.2 }}
+          >
+            {loading ? "Creating Property..." : "Create Property"}
+          </Button>
+        </Grid>
+      </Grid>
+    </Box>
+  );
+}
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\PropertyList.jsx =====
+
+// src/components/PropertyList.jsx
+import React, { useEffect, useState } from 'react';
+import {
+  Grid,
+  Card,
+  CardMedia,
+  CardContent,
+  CardActions,
+  Typography,
+  Button,
+  Box,
+  Chip,
+  IconButton,
+  Avatar,
+  Paper,
+  InputBase,
+  InputAdornment,
+  FormControl,
+  Select,
+  MenuItem,
+  Menu,
+  Pagination
+} from '@mui/material';
+import { Link } from 'react-router-dom';
+import { fetchProperties } from '../api/api';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
+import BedIcon from '@mui/icons-material/Bed';
+import BathtubIcon from '@mui/icons-material/Bathtub';
+import SquareFootIcon from '@mui/icons-material/SquareFoot';
+import FavoriteIcon from '@mui/icons-material/Favorite';
+import ShareIcon from '@mui/icons-material/Share';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import SearchIcon from '@mui/icons-material/Search';
+import FilterListIcon from '@mui/icons-material/FilterList';
+
+const PropertyList = () => {
+  const [properties, setProperties] = useState([]);
+  const [filteredProperties, setFilteredProperties] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [propertyType, setPropertyType] = useState('all');
+  const [sortBy, setSortBy] = useState('newest');
+  const [page, setPage] = useState(1);
+  const [anchorEl, setAnchorEl] = useState(null);
+  const itemsPerPage = 6;
+
+  useEffect(() => {
+    const getProperties = async () => {
+      try {
+        const res = await fetchProperties();
+        setProperties(res.data.properties || []);
+        setFilteredProperties(res.data.properties || []);
+        setLoading(false);
+      } catch (err) {
+        console.error('Failed to fetch properties:', err);
+        setLoading(false);
+      }
+    };
+
+    getProperties();
+  }, []);
+
+  useEffect(() => {
+    let result = properties;
+
+    // Filter by search term
+    if (searchTerm) {
+      result = result.filter(property =>
+        property.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        property.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (property.location && property.location.toLowerCase().includes(searchTerm.toLowerCase()))
+      );
+    }
+
+    // Filter by property type
+    if (propertyType !== 'all') {
+      result = result.filter(property => property.propertyType === propertyType);
+    }
+
+    // Sort properties
+    switch (sortBy) {
+      case 'price-low':
+        result.sort((a, b) => a.price - b.price);
+        break;
+      case 'price-high':
+        result.sort((a, b) => b.price - a.price);
+        break;
+      case 'newest':
+        // Assuming properties have a createdAt field
+        result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        break;
+      default:
+        break;
+    }
+
+    setFilteredProperties(result);
+    setPage(1); // Reset to first page when filters change
+  }, [properties, searchTerm, propertyType, sortBy]);
+
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
+  };
+
+  const handlePropertyTypeChange = (e) => {
+    setPropertyType(e.target.value);
+  };
+
+  const handleSortChange = (e) => {
+    setSortBy(e.target.value);
+    setAnchorEl(null);
+  };
+
+  const handlePageChange = (event, value) => {
+    setPage(value);
+  };
+
+  const handleMenuClick = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  // Calculate pagination
+  const pageCount = Math.ceil(filteredProperties.length / itemsPerPage);
+  const displayedProperties = filteredProperties.slice(
+    (page - 1) * itemsPerPage,
+    page * itemsPerPage
+  );
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading properties...</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: { xs: 2, md: 3 } }}>
+      {/* Search and Filter Section */}
+      <Paper elevation={2} sx={{ p: 3, mb: 4, borderRadius: 2 }}>
+        <Grid container spacing={2} alignItems="center">
+          <Grid item xs={12} md={6}>
+            <Paper
+              component="form"
+              sx={{ p: '2px 4px', display: 'flex', alignItems: 'center', borderRadius: 2 }}
+            >
+              <InputBase
+                sx={{ ml: 1, flex: 1 }}
+                placeholder="Search properties..."
+                value={searchTerm}
+                onChange={handleSearchChange}
+                startAdornment={
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ color: '#5C6B73' }} />
+                  </InputAdornment>
+                }
+              />
+            </Paper>
+          </Grid>
+          <Grid item xs={6} md={3}>
+            <FormControl fullWidth size="small">
+              <Select
+                value={propertyType}
+                onChange={handlePropertyTypeChange}
+                displayEmpty
+                sx={{ borderRadius: 2 }}
+              >
+                <MenuItem value="all">All Types</MenuItem>
+                <MenuItem value="house">House</MenuItem>
+                <MenuItem value="apartment">Apartment</MenuItem>
+                <MenuItem value="condo">Condo</MenuItem>
+                <MenuItem value="land">Land</MenuItem>
+                <MenuItem value="commercial">Commercial</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={6} md={3}>
+            <Button
+              variant="outlined"
+              fullWidth
+              onClick={handleMenuClick}
+              startIcon={<FilterListIcon />}
+              sx={{ borderRadius: 2, justifyContent: 'space-between' }}
+            >
+              {sortBy === 'newest' && 'Newest First'}
+              {sortBy === 'price-low' && 'Price: Low to High'}
+              {sortBy === 'price-high' && 'Price: High to Low'}
+            </Button>
+            <Menu
+              anchorEl={anchorEl}
+              open={Boolean(anchorEl)}
+              onClose={handleMenuClose}
+            >
+              <MenuItem onClick={() => handleSortChange({ target: { value: 'newest' } })}>
+                Newest First
+              </MenuItem>
+              <MenuItem onClick={() => handleSortChange({ target: { value: 'price-low' } })}>
+                Price: Low to High
+              </MenuItem>
+              <MenuItem onClick={() => handleSortChange({ target: { value: 'price-high' } })}>
+                Price: High to Low
+              </MenuItem>
+            </Menu>
+          </Grid>
+        </Grid>
+      </Paper>
+
+      {/* Results Count */}
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Typography variant="h6" fontWeight={600} color="#2C3E50">
+          {filteredProperties.length} Properties Found
+        </Typography>
+      </Box>
+
+      {/* Property Grid */}
+      <Grid container spacing={3}>
+        {displayedProperties.length > 0 ? (
+          displayedProperties.map((property) => (
+            <Grid item xs={12} sm={6} md={4} key={property.id}>
+              <Card elevation={3} sx={{ borderRadius: 2, overflow: 'hidden', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <CardMedia
+                  component="div"
+                  sx={{
+                    height: 200,
+                    backgroundImage: property.image
+                      ? `url(${property.image})`
+                      : 'linear-gradient(135deg, #E8E2D8 0%, #D4A373 100%)',
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                    position: 'relative'
+                  }}
+                >
+                  <Box sx={{ position: 'absolute', top: 10, right: 10 }}>
+                    <Chip
+                      label={property.propertyType || 'Property'}
+                      size="small"
+                      sx={{
+                        bgcolor: '#FFFFFF',
+                        color: '#2C6E49',
+                        fontWeight: 500,
+                      }}
+                    />
+                  </Box>
+                  <Box sx={{ position: 'absolute', bottom: 10, left: 10 }}>
+                    <Typography
+                      variant="h6"
+                      fontWeight={600}
+                      color="#FFFFFF"
+                      sx={{
+                        textShadow: '0 1px 3px rgba(0,0,0,0.6)',
+                        backgroundColor: 'rgba(0,0,0,0.4)',
+                        p: 0.5,
+                        borderRadius: 1,
+                      }}
+                    >
+                      ${property.price ? property.price.toLocaleString() : 'Price on request'}
+                    </Typography>
+                  </Box>
+                </CardMedia>
+                <CardContent sx={{ flexGrow: 1 }}>
+                  <Typography variant="h6" fontWeight={600} color="#2C3E50" gutterBottom>
+                    {property.title}
+                  </Typography>
+
+                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                    <LocationOnIcon fontSize="small" sx={{ color: '#5C6B73', mr: 0.5 }} />
+                    <Typography variant="body2" color="#5C6B73">
+                      {property.location || 'Location not specified'}
+                    </Typography>
+                  </Box>
+
+                  <Typography variant="body2" color="#5C6B73" sx={{ mb: 2 }}>
+                    {property.description ? `${property.description.substring(0, 100)}...` : 'No description available'}
+                  </Typography>
+
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                    {property.bedrooms && (
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <BedIcon fontSize="small" sx={{ color: '#5C6B73', mr: 0.5 }} />
+                        <Typography variant="body2" color="#5C6B73">
+                          {property.bedrooms} Beds
+                        </Typography>
+                      </Box>
+                    )}
+                    {property.bathrooms && (
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <BathtubIcon fontSize="small" sx={{ color: '#5C6B73', mr: 0.5 }} />
+                        <Typography variant="body2" color="#5C6B73">
+                          {property.bathrooms} Baths
+                        </Typography>
+                      </Box>
+                    )}
+                    {property.area && (
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <SquareFootIcon fontSize="small" sx={{ color: '#5C6B73', mr: 0.5 }} />
+                        <Typography variant="body2" color="#5C6B73">
+                          {property.area} sqft
+                        </Typography>
+                      </Box>
+                    )}
+                  </Box>
+                </CardContent>
+                <CardActions sx={{ justifyContent: 'space-between', p: 2 }}>
+                  <Box sx={{ display: 'flex' }}>
+                    <IconButton size="small" sx={{ color: '#D4A373' }}>
+                      <FavoriteIcon />
+                    </IconButton>
+                    <IconButton size="small" sx={{ color: '#5C6B73' }}>
+                      <ShareIcon />
+                    </IconButton>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    component={Link}
+                    to={`/properties/${property.id}`}
+                    sx={{
+                      borderRadius: 2,
+                      fontWeight: 500,
+                      boxShadow: 'none',
+                    }}
+                  >
+                    View Details
+                  </Button>
+                </CardActions>
+              </Card>
+            </Grid>
+          ))
+        ) : (
+          <Grid item xs={12}>
+            <Paper elevation={2} sx={{ p: 4, textAlign: 'center', borderRadius: 2 }}>
+              <Typography variant="h6" color="#5C6B73">
+                No properties found matching your criteria
+              </Typography>
+              <Typography variant="body2" color="#5C6B73" sx={{ mt: 1 }}>
+                Try adjusting your filters or search terms
+              </Typography>
+            </Paper>
+          </Grid>
+        )}
+      </Grid>
+
+      {/* Pagination */}
+      {pageCount > 1 && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+          <Pagination
+            count={pageCount}
+            page={page}
+            onChange={handlePageChange}
+            color="primary"
+            sx={{
+              '& .MuiPaginationItem-root': {
+                borderRadius: 1,
+              }
+            }}
+          />
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+export default PropertyList;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\Sidebar.jsx =====
+
+// src/components/Sidebar.jsx
+import React from 'react';
+import {
+  Drawer,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Divider,
+  IconButton,
+  Typography,
+  Box
+} from '@mui/material';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import PeopleIcon from '@mui/icons-material/People';
+import HomeIcon from '@mui/icons-material/Properties';
+import SettingsIcon from '@mui/icons-material/Settings';
+import LogoutIcon from '@mui/icons-material/Logout';
+import PersonIcon from '@mui/icons-material/Person';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+
+const drawerWidth = 240;
+
+const Sidebar = ({ open, toggleDrawer }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    navigate('/');
+  };
+
+  const menuItems = [
+    { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { text: 'Properties', icon: <HomeIcon />, path: '/properties' },
+    { text: 'Users', icon: <PeopleIcon />, path: '/users', adminOnly: true },
+    { text: 'User Profile', icon: <PersonIcon />, path: '/profile' },
+    { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+    { text: 'Notifications', icon: <NotificationsIcon />, path: '/notifications' },
+  ];
+
+  const bottomItems = [
+    { text: 'Logout', icon: <LogoutIcon />, action: handleLogout },
+  ];
+
+  const isActive = (path) => location.pathname === path;
+
+  const handleNavigation = (path, action) => {
+    if (action) {
+      action();
+    } else if (path) {
+      navigate(path);
+    }
+  };
+
+  return (
+    <Drawer
+      variant="permanent"
+      sx={{
+        width: open ? drawerWidth : 80,
+        flexShrink: 0,
+        '& .MuiDrawer-paper': {
+          width: open ? drawerWidth : 80,
+          boxSizing: 'border-box',
+          transition: 'width 0.3s',
+          overflowX: 'hidden',
+          borderRight: '1px solid rgba(44, 110, 73, 0.12)',
+        },
+      }}
+      open={open}
+    >
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 2 }}>
+          {open && (
+            <Typography
+              variant="h6"
+              component={Link}
+              to="/dashboard"
+              sx={{
+                textDecoration: 'none',
+                color: '#2C6E49',
+                fontWeight: 600,
+                letterSpacing: '-0.5px',
+              }}
+            >
+              LandState
+            </Typography>
+          )}
+          <IconButton onClick={toggleDrawer}>
+            {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+          </IconButton>
+        </Box>
+
+        <Divider />
+
+        <List sx={{ flexGrow: 1 }}>
+          {menuItems.map((item) => {
+            // Check if user is admin for admin-only items
+            if (item.adminOnly) {
+              const token = localStorage.getItem('token');
+              if (!token) return null;
+
+              try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                if (payload.role !== 'admin') return null;
+              } catch (err) {
+                console.error('Error decoding token:', err);
+                return null;
+              }
+            }
+
+            return (
+              <ListItem key={item.text} disablePadding>
+                <ListItemButton
+                  component={Link}
+                  to={item.path}
+                  onClick={() => handleNavigation(item.path, item.action)}
+                  sx={{
+                    minHeight: 48,
+                    justifyContent: open ? 'initial' : 'center',
+                    px: 2.5,
+                    backgroundColor: isActive(item.path) ? 'rgba(44, 110, 73, 0.08)' : 'transparent',
+                    '&:hover': {
+                      backgroundColor: 'rgba(44, 110, 73, 0.08)',
+                    },
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{
+                      minWidth: 0,
+                      mr: open ? 3 : 'auto',
+                      justifyContent: 'center',
+                      color: isActive(item.path) ? '#2C6E49' : '#5C6B73',
+                    }}
+                  >
+                    {item.icon}
+                  </ListItemIcon>
+                  {open && (
+                    <ListItemText
+                      primary={item.text}
+                      sx={{
+                        color: isActive(item.path) ? '#2C6E49' : '#2C3E50',
+                        fontWeight: isActive(item.path) ? 500 : 400,
+                      }}
+                    />
+                  )}
+                </ListItemButton>
+              </ListItem>
+            );
+          })}
+        </List>
+
+        <Divider />
+
+        <List>
+          {bottomItems.map((item) => (
+            <ListItem key={item.text} disablePadding>
+              <ListItemButton
+                onClick={() => handleNavigation(item.path, item.action)}
+                sx={{
+                  minHeight: 48,
+                  justifyContent: open ? 'initial' : 'center',
+                  px: 2.5,
+                  '&:hover': {
+                    backgroundColor: 'rgba(44, 110, 73, 0.08)',
+                  },
+                }}
+              >
+                <ListItemIcon
+                  sx={{
+                    minWidth: 0,
+                    mr: open ? 3 : 'auto',
+                    justifyContent: 'center',
+                    color: '#5C6B73',
+                  }}
+                >
+                  {item.icon}
+                </ListItemIcon>
+                {open && (
+                  <ListItemText
+                    primary={item.text}
+                    sx={{ color: '#2C3E50' }}
+                  />
+                )}
+              </ListItemButton>
+            </ListItem>
+          ))}
+        </List>
+      </Box>
+    </Drawer>
+  );
+};
+
+export default Sidebar;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\SignupForm.jsx =====
+
+// src/components/SignupForm.jsx
+import React, { useState } from "react";
+import {
+  TextField,
+  Button,
+  Typography,
+  Paper,
+  Divider,
+  Box,
+  InputAdornment,
+  IconButton,
+  Alert,
+  Checkbox,
+  FormControlLabel
+} from "@mui/material";
+import { useNavigate, Link } from "react-router-dom";
+import { createUser } from "../api/api";
+import PersonIcon from '@mui/icons-material/Person';
+import EmailIcon from '@mui/icons-material/Email';
+import LockIcon from '@mui/icons-material/Lock';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+
+export default function SignupForm() {
+  const [form, setForm] = useState({ username: "", email: "", password: "" });
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [agreeTerms, setAgreeTerms] = useState(false);
+  const navigate = useNavigate();
+
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // Basic validation
+    if (!form.username || !form.email || !form.password) {
+      setError("All fields are required");
+      return;
+    }
+
+    if (form.password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+
+    if (!agreeTerms) {
+      setError("You must agree to the terms and conditions");
+      return;
+    }
+
+    try {
+      await createUser(form);
+      navigate("/");
+    } catch (err) {
+      setError(err.response?.data?.error || "Signup failed");
+    }
+  };
+
+  const handleTogglePasswordVisibility = () => {
+    setShowPassword(!showPassword);
+  };
+
+  const handleToggleConfirmPasswordVisibility = () => {
+    setShowConfirmPassword(!showConfirmPassword);
+  };
+
+  return (
+    <Box
+      minHeight="100vh"
+      display="flex"
+      justifyContent="center"
+      alignItems="center"
+      sx={{
+        background: "linear-gradient(135deg, #F5F2ED 0%, #E8E2D8 100%)",
+        p: 2
+      }}
+    >
+      <Paper
+        elevation={6}
+        sx={{
+          p: { xs: 3, md: 5 },
+          borderRadius: 3,
+          width: "100%",
+          maxWidth: 450,
+          boxShadow: '0 10px 30px rgba(44, 110, 73, 0.1)'
+        }}
+      >
+        <Box textAlign="center" mb={4}>
+          <Box
+            component="img"
+            src="/logo.png"
+            alt="LandState Logo"
+            sx={{
+              height: 60,
+              mb: 2,
+              display: { xs: 'none', md: 'block' }
+            }}
+          />
+          <Typography
+            variant="h4"
+            fontWeight={700}
+            color="#2C6E49"
+            gutterBottom
+          >
+            Create Account
+          </Typography>
+          <Typography variant="body2" color="#5C6B73">
+            Join us today and get started
+          </Typography>
+        </Box>
+
+        <Divider sx={{ mb: 4 }} />
+
+        {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+
+        <form onSubmit={handleSubmit}>
+          <TextField
+            label="Username"
+            name="username"
+            fullWidth
+            margin="normal"
+            value={form.username}
+            onChange={handleChange}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <PersonIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 2,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <TextField
+            label="Email"
+            name="email"
+            type="email"
+            fullWidth
+            margin="normal"
+            value={form.email}
+            onChange={handleChange}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <EmailIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 2,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <TextField
+            label="Password"
+            name="password"
+            type={showPassword ? "text" : "password"}
+            fullWidth
+            margin="normal"
+            value={form.password}
+            onChange={handleChange}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <LockIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle password visibility"
+                    onClick={handleTogglePasswordVisibility}
+                    edge="end"
+                  >
+                    {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 2,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <TextField
+            label="Confirm Password"
+            type={showConfirmPassword ? "text" : "password"}
+            fullWidth
+            margin="normal"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <LockIcon sx={{ color: '#5C6B73' }} />
+                </InputAdornment>
+              ),
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle confirm password visibility"
+                    onClick={handleToggleConfirmPasswordVisibility}
+                    edge="end"
+                  >
+                    {showConfirmPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              mb: 3,
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 2,
+              },
+            }}
+          />
+
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={agreeTerms}
+                onChange={(e) => setAgreeTerms(e.target.checked)}
+                color="primary"
+                sx={{ '& .MuiSvgIcon-root': { fontSize: 20 } }}
+              />
+            }
+            label={
+              <Typography variant="body2" color="#5C6B73">
+                I agree to the{" "}
+                <Link
+                  to="/terms"
+                  style={{
+                    color: "#2C6E49",
+                    textDecoration: 'none',
+                    '&:hover': {
+                      textDecoration: 'underline'
+                    }
+                  }}
+                >
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link
+                  to="/privacy"
+                  style={{
+                    color: "#2C6E49",
+                    textDecoration: 'none',
+                    '&:hover': {
+                      textDecoration: 'underline'
+                    }
+                  }}
+                >
+                  Privacy Policy
+                </Link>
+              </Typography>
+            }
+            sx={{ mb: 3 }}
+          />
+
+          <Button
+            variant="contained"
+            color="primary"
+            type="submit"
+            fullWidth
+            sx={{
+              py: 1.5,
+              borderRadius: 2,
+              fontWeight: 600,
+              fontSize: '1rem',
+              boxShadow: 'none',
+              '&:hover': {
+                boxShadow: '0 4px 12px rgba(44, 110, 73, 0.3)',
+              }
+            }}
+          >
+            Create Account
+          </Button>
+        </form>
+
+        <Box mt={4} textAlign="center">
+          <Typography variant="body2" color="#5C6B73">
+            Already have an account?{" "}
+            <Link
+              to="/"
+              style={{
+                color: "#2C6E49",
+                fontWeight: 500,
+                textDecoration: 'none',
+                '&:hover': {
+                  textDecoration: 'underline'
+                }
+              }}
+            >
+              Sign in
+            </Link>
+          </Typography>
+        </Box>
+      </Paper>
+    </Box>
+  );
+}
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\UserManagement.jsx =====
+
+// src/components/UserManagement.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  Container,
+  Typography,
+  Box,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Button,
+  IconButton,
+  Chip,
+  Avatar,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Alert,
+  CircularProgress
+} from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import { fetchUsers, createUser, updateUser, deleteUser } from '../api/api';
+import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import PersonIcon from '@mui/icons-material/Person';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+
+const UserManagement = () => {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [openDialog, setOpenDialog] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [userForm, setUserForm] = useState({
+    username: '',
+    email: '',
+    role: 'user',
+    password: '',
+  });
+  const [actionLoading, setActionLoading] = useState(false);
+  const navigate = useNavigate();
+
+  // Function to refresh users list
+  const refreshUsers = async () => {
+    try {
+      const res = await fetchUsers();
+      setUsers(res.data.users || []);
+    } catch (err) {
+      console.error('Failed to fetch users:', err);
+      setError('Failed to load users');
+    }
+  };
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const currentTime = Math.floor(Date.now() / 1000);
+
+      if (payload.exp < currentTime) {
+        localStorage.removeItem('token');
+        navigate('/');
+        return;
+      }
+
+      // Check if user is admin
+      if (payload.role !== 'admin') {
+        navigate('/dashboard');
+        return;
+      }
+
+      // Fetch users
+      refreshUsers();
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/');
+    }
+  }, [navigate]);
+
+  const handleAddUser = () => {
+    setEditingUser(null);
+    setUserForm({
+      username: '',
+      email: '',
+      role: 'user',
+      password: '',
+    });
+    setOpenDialog(true);
+  };
+
+  const handleEditUser = (user) => {
+    setEditingUser(user);
+    setUserForm({
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      password: '', // Don't pre-fill password for security
+    });
+    setOpenDialog(true);
+  };
+
+  const handleDeleteUser = async (userId) => {
+    if (window.confirm('Are you sure you want to delete this user?')) {
+      try {
+        await deleteUser(userId);
+        // Update the UI immediately
+        setUsers(users.filter(user => user.id !== userId));
+        setSuccess('User deleted successfully!');
+        setTimeout(() => setSuccess(''), 3000);
+      } catch (err) {
+        console.error('Failed to delete user:', err);
+        setError('Failed to delete user');
+      }
+    }
+  };
+
+  const handleFormChange = (e) => {
+    setUserForm({
+      ...userForm,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const handleSaveUser = async () => {
+    setActionLoading(true);
+    try {
+      if (editingUser) {
+        // Update existing user
+        await updateUser(editingUser.id, userForm);
+        // Update the UI immediately
+        setUsers(users.map(user =>
+          user.id === editingUser.id ? { ...user, ...userForm } : user
+        ));
+        setSuccess('User updated successfully!');
+      } else {
+        // Create new user
+        const res = await createUser(userForm);
+        // Update the UI immediately
+        setUsers([...users, res.data]);
+        setSuccess('User created successfully!');
+      }
+
+      setOpenDialog(false);
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      console.error('Failed to save user:', err);
+      setError(err.response?.data?.error || 'Failed to save user');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const getRoleColor = (role) => {
+    switch (role) {
+      case 'admin':
+        return '#2C6E49';
+      case 'seller':
+        return '#D4A373';
+      default:
+        return '#5C6B73';
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  return (
+    <Container sx={{ py: 4 }}>
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 3 }}>{success}</Alert>}
+
+      <Paper elevation={3} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Box sx={{ p: 3, backgroundColor: '#2C6E49', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Typography variant="h4" fontWeight={600}>
+            User Management
+          </Typography>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={<AddIcon />}
+            onClick={handleAddUser}
+          >
+            Add User
+          </Button>
+        </Box>
+
+        <Box sx={{ p: 3 }}>
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>User</TableCell>
+                  <TableCell>Email</TableCell>
+                  <TableCell>Role</TableCell>
+                  <TableCell>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {users.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Avatar sx={{ mr: 2, bgcolor: getRoleColor(user.role) }}>
+                          <PersonIcon />
+                        </Avatar>
+                        {user.username}
+                      </Box>
+                    </TableCell>
+                    <TableCell>{user.email}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={user.role}
+                        sx={{
+                          bgcolor: getRoleColor(user.role),
+                          color: 'white',
+                          fontWeight: 500,
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <IconButton
+                        color="primary"
+                        onClick={() => handleEditUser(user)}
+                      >
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton
+                        color="error"
+                        onClick={() => handleDeleteUser(user.id)}
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      </Paper>
+
+      {/* Add/Edit User Dialog */}
+      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {editingUser ? 'Edit User' : 'Add New User'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1 }}>
+            <TextField
+              label="Username"
+              name="username"
+              fullWidth
+              margin="normal"
+              value={userForm.username}
+              onChange={handleFormChange}
+              required
+            />
+            <TextField
+              label="Email"
+              name="email"
+              type="email"
+              fullWidth
+              margin="normal"
+              value={userForm.email}
+              onChange={handleFormChange}
+              required
+            />
+            <FormControl fullWidth margin="normal">
+              <InputLabel id="role-label">Role</InputLabel>
+              <Select
+                labelId="role-label"
+                name="role"
+                value={userForm.role}
+                onChange={handleFormChange}
+                label="Role"
+              >
+                <MenuItem value="user">User</MenuItem>
+                <MenuItem value="seller">Seller</MenuItem>
+                <MenuItem value="admin">Admin</MenuItem>
+              </Select>
+            </FormControl>
+            {!editingUser && (
+              <TextField
+                label="Password"
+                name="password"
+                type="password"
+                fullWidth
+                margin="normal"
+                value={userForm.password}
+                onChange={handleFormChange}
+                required
+              />
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
+          <Button
+            onClick={handleSaveUser}
+            variant="contained"
+            color="primary"
+            disabled={actionLoading}
+            startIcon={actionLoading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+          >
+            {editingUser ? 'Update' : 'Create'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Container>
+  );
+};
+
+export default UserManagement;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\UserProfile.jsx =====
+
+// src/components/UserProfile.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  Container,
+  Typography,
+  Box,
+  Paper,
+  Grid,
+  Card,
+  CardContent,
+  CardHeader,
+  Avatar,
+  Button,
+  IconButton,
+  TextField,
+  Divider,
+  Alert,
+  Chip,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemAvatar,
+  Badge,
+} from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import EditIcon from '@mui/icons-material/Edit';
+import PersonIcon from '@mui/icons-material/Person';
+import EmailIcon from '@mui/icons-material/Email';
+import PhoneIcon from '@mui/icons-material/Phone';
+import LocationOnIcon from '@mui/icons-material/LocationOn';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+
+const UserProfile = () => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [editMode, setEditMode] = useState(false);
+  const [formData, setFormData] = useState({
+    username: '',
+    email: '',
+    phone: '',
+    location: '',
+    bio: '',
+  });
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState('');
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const currentTime = Math.floor(Date.now() / 1000);
+
+      if (payload.exp < currentTime) {
+        localStorage.removeItem('token');
+        navigate('/');
+        return;
+      }
+
+      // Mock user data for now
+      const mockUser = {
+        id: payload.id,
+        username: payload.username || 'User',
+        email: 'user@example.com',
+        phone: '+1 (555) 123-4567',
+        location: 'New York, NY',
+        bio: 'Real estate enthusiast with a passion for finding the perfect home for every client.',
+        role: payload.role,
+        created_at: '2023-01-01',
+        avatar_url: '',
+      };
+
+      setUser(mockUser);
+      setFormData({
+        username: mockUser.username,
+        email: mockUser.email,
+        phone: mockUser.phone,
+        location: mockUser.location,
+        bio: mockUser.bio,
+      });
+      setAvatarPreview(mockUser.avatar_url);
+      setLoading(false);
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/');
+    }
+  }, [navigate]);
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const handleAvatarChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setAvatarFile(file);
+      setAvatarPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const handleEditToggle = () => {
+    if (editMode) {
+      // Cancel edit mode
+      if (user) {
+        setFormData({
+          username: user.username,
+          email: user.email,
+          phone: user.phone,
+          location: user.location,
+          bio: user.bio,
+        });
+        setAvatarPreview(user.avatar_url);
+        setAvatarFile(null);
+      }
+    }
+    setEditMode(!editMode);
+  };
+
+  const handleSave = async () => {
+    try {
+      // Mock update - in a real app, you would call your API
+      const updatedUser = {
+        ...user,
+        ...formData,
+      };
+
+      if (avatarFile) {
+        // Mock avatar upload
+        updatedUser.avatar_url = URL.createObjectURL(avatarFile);
+      }
+
+      setUser(updatedUser);
+      setEditMode(false);
+      setSuccess('Profile updated successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      console.error('Failed to update profile:', err);
+      setError('Failed to update profile');
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading profile...</Typography>
+      </Box>
+    );
+  }
+
+  if (error && !user) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">{error}</Alert>
+      </Box>
+    );
+  }
+
+  return (
+    <Container sx={{ py: 4 }}>
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 3 }}>{success}</Alert>}
+
+      <Paper elevation={3} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Box sx={{ p: 3, backgroundColor: '#2C6E49', color: 'white' }}>
+          <Typography variant="h4" fontWeight={600}>
+            User Profile
+          </Typography>
+        </Box>
+
+        <Box sx={{ p: 4 }}>
+          <Grid container spacing={4}>
+            {/* Left Column - Avatar and Basic Info */}
+            <Grid item xs={12} md={4}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3 }}>
+                <Badge
+                  overlap="circular"
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                  badgeContent={
+                    editMode ? (
+                      <IconButton
+                        component="label"
+                        sx={{
+                          backgroundColor: '#2C6E49',
+                          color: 'white',
+                          '&:hover': { backgroundColor: '#1E4B37' },
+                        }}
+                      >
+                        <PhotoCameraIcon fontSize="small" />
+                        <input
+                          type="file"
+                          hidden
+                          accept="image/*"
+                          onChange={handleAvatarChange}
+                        />
+                      </IconButton>
+                    ) : null
+                  }
+                >
+                  <Avatar
+                    src={avatarPreview}
+                    sx={{ width: 120, height: 120, border: '4px solid #F5F2ED' }}
+                  >
+                    <PersonIcon sx={{ fontSize: 60 }} />
+                  </Avatar>
+                </Badge>
+
+                <Typography variant="h5" fontWeight={600} sx={{ mt: 2 }}>
+                  {user?.username}
+                </Typography>
+
+                <Chip
+                  label={user?.role}
+                  sx={{
+                    mt: 1,
+                    bgcolor: user?.role === 'admin' ? '#2C6E49' : '#D4A373',
+                    color: 'white',
+                    fontWeight: 500,
+                  }}
+                />
+
+                <Typography variant="body2" color="#5C6B73" sx={{ mt: 2 }}>
+                  Member since {new Date(user?.created_at).toLocaleDateString()}
+                </Typography>
+              </Box>
+
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardHeader title="Account Details" />
+                <Divider />
+                <CardContent>
+                  <List disablePadding>
+                    <ListItem>
+                      <ListItemAvatar>
+                        <Avatar sx={{ bgcolor: '#2C6E49' }}>
+                          <EmailIcon />
+                        </Avatar>
+                      </ListItemAvatar>
+                      <ListItemText
+                        primary="Email"
+                        secondary={user?.email}
+                      />
+                    </ListItem>
+
+                    {user?.phone && (
+                      <ListItem>
+                        <ListItemAvatar>
+                          <Avatar sx={{ bgcolor: '#D4A373' }}>
+                            <PhoneIcon />
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary="Phone"
+                          secondary={user?.phone}
+                        />
+                      </ListItem>
+                    )}
+
+                    {user?.location && (
+                      <ListItem>
+                        <ListItemAvatar>
+                          <Avatar sx={{ bgcolor: '#10B981' }}>
+                            <LocationOnIcon />
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary="Location"
+                          secondary={user?.location}
+                        />
+                      </ListItem>
+                    )}
+                  </List>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Right Column - Editable Form */}
+            <Grid item xs={12} md={8}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardHeader
+                  title="Profile Information"
+                  action={
+                    <Button
+                      variant={editMode ? "outlined" : "contained"}
+                      startIcon={<EditIcon />}
+                      onClick={handleEditToggle}
+                    >
+                      {editMode ? 'Cancel' : 'Edit Profile'}
+                    </Button>
+                  }
+                />
+                <Divider />
+                <CardContent>
+                  <Grid container spacing={3}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Username"
+                        name="username"
+                        fullWidth
+                        value={formData.username}
+                        onChange={handleChange}
+                        disabled={!editMode}
+                        InputProps={{
+                          startAdornment: (
+                            <PersonIcon sx={{ mr: 1, color: '#5C6B73' }} />
+                          ),
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Email"
+                        name="email"
+                        type="email"
+                        fullWidth
+                        value={formData.email}
+                        onChange={handleChange}
+                        disabled={!editMode}
+                        InputProps={{
+                          startAdornment: (
+                            <EmailIcon sx={{ mr: 1, color: '#5C6B73' }} />
+                          ),
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Phone"
+                        name="phone"
+                        fullWidth
+                        value={formData.phone}
+                        onChange={handleChange}
+                        disabled={!editMode}
+                        InputProps={{
+                          startAdornment: (
+                            <PhoneIcon sx={{ mr: 1, color: '#5C6B73' }} />
+                          ),
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Location"
+                        name="location"
+                        fullWidth
+                        value={formData.location}
+                        onChange={handleChange}
+                        disabled={!editMode}
+                        InputProps={{
+                          startAdornment: (
+                            <LocationOnIcon sx={{ mr: 1, color: '#5C6B73' }} />
+                          ),
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12}>
+                      <TextField
+                        label="Bio"
+                        name="bio"
+                        fullWidth
+                        multiline
+                        rows={4}
+                        value={formData.bio}
+                        onChange={handleChange}
+                        disabled={!editMode}
+                        placeholder="Tell us about yourself..."
+                      />
+                    </Grid>
+
+                    {editMode && (
+                      <Grid item xs={12}>
+                        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                          <Button
+                            variant="contained"
+                            color="primary"
+                            onClick={handleSave}
+                          >
+                            Save Changes
+                          </Button>
+                        </Box>
+                      </Grid>
+                    )}
+                  </Grid>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+      </Paper>
+    </Container>
+  );
+};
+
+export default UserProfile;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\components\UserSettings.jsx =====
+
+// src/components/UserSettings.jsx
+import React, { useState, useEffect } from 'react';
+import {
+  Container,
+  Typography,
+  Box,
+  Paper,
+  Grid,
+  Card,
+  CardContent,
+  CardHeader,
+  Switch,
+  TextField,
+  Button,
+  Divider,
+  Alert,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemSecondaryAction,
+  IconButton,
+  Avatar,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Select,
+} from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import SettingsIcon from '@mui/icons-material/Settings';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import SecurityIcon from '@mui/icons-material/Security';
+import PaletteIcon from '@mui/icons-material/Palette';
+import LanguageIcon from '@mui/icons-material/Language';
+
+const UserSettings = () => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [settings, setSettings] = useState({
+    emailNotifications: true,
+    pushNotifications: false,
+    darkMode: false,
+    language: 'en',
+  });
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const currentTime = Math.floor(Date.now() / 1000);
+
+      if (payload.exp < currentTime) {
+        localStorage.removeItem('token');
+        navigate('/');
+        return;
+      }
+
+      // Mock settings - in a real app, you would fetch from API
+      const mockSettings = {
+        emailNotifications: true,
+        pushNotifications: false,
+        darkMode: false,
+        language: 'en',
+      };
+
+      setSettings(mockSettings);
+      setLoading(false);
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/');
+    }
+  }, [navigate]);
+
+  const handleSettingChange = (e) => {
+    setSettings({
+      ...settings,
+      [e.target.name]: e.target.checked || e.target.value,
+    });
+  };
+
+  const handlePasswordChange = (e) => {
+    setPasswordForm({
+      ...passwordForm,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const handleSaveSettings = () => {
+    try {
+      // Mock save - in a real app, you would call your API
+      setSuccess('Settings saved successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError('Failed to save settings');
+    }
+  };
+
+  const handleChangePassword = () => {
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setError('New passwords do not match');
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    try {
+      // Mock password change - in a real app, you would call your API
+      setSuccess('Password changed successfully!');
+      setPasswordForm({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      });
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError('Failed to change password');
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography>Loading settings...</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Container sx={{ py: 4 }}>
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 3 }}>{success}</Alert>}
+
+      <Paper elevation={3} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Box sx={{ p: 3, backgroundColor: '#2C6E49', color: 'white' }}>
+          <Typography variant="h4" fontWeight={600}>
+            User Settings
+          </Typography>
+        </Box>
+
+        <Box sx={{ p: 4 }}>
+          <Grid container spacing={4}>
+            {/* Notification Settings */}
+            <Grid item xs={12} md={6}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardHeader
+                  title="Notification Settings"
+                  avatar={
+                    <Avatar sx={{ bgcolor: '#2C6E49' }}>
+                      <NotificationsIcon />
+                    </Avatar>
+                  }
+                />
+                <Divider />
+                <CardContent>
+                  <List>
+                    <ListItem>
+                      <ListItemText
+                        primary="Email Notifications"
+                        secondary="Receive email notifications about property updates"
+                      />
+                      <ListItemSecondaryAction>
+                        <Switch
+                          edge="end"
+                          name="emailNotifications"
+                          checked={settings.emailNotifications}
+                          onChange={handleSettingChange}
+                        />
+                      </ListItemSecondaryAction>
+                    </ListItem>
+
+                    <ListItem>
+                      <ListItemText
+                        primary="Push Notifications"
+                        secondary="Receive push notifications on your device"
+                      />
+                      <ListItemSecondaryAction>
+                        <Switch
+                          edge="end"
+                          name="pushNotifications"
+                          checked={settings.pushNotifications}
+                          onChange={handleSettingChange}
+                        />
+                      </ListItemSecondaryAction>
+                    </ListItem>
+                  </List>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Appearance Settings */}
+            <Grid item xs={12} md={6}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardHeader
+                  title="Appearance"
+                  avatar={
+                    <Avatar sx={{ bgcolor: '#D4A373' }}>
+                      <PaletteIcon />
+                    </Avatar>
+                  }
+                />
+                <Divider />
+                <CardContent>
+                  <List>
+                    <ListItem>
+                      <ListItemText
+                        primary="Dark Mode"
+                        secondary="Enable dark theme for the application"
+                      />
+                      <ListItemSecondaryAction>
+                        <Switch
+                          edge="end"
+                          name="darkMode"
+                          checked={settings.darkMode}
+                          onChange={handleSettingChange}
+                        />
+                      </ListItemSecondaryAction>
+                    </ListItem>
+
+                    <ListItem>
+                      <ListItemText
+                        primary="Language"
+                        secondary="Select your preferred language"
+                      />
+                      <ListItemSecondaryAction>
+                        <TextField
+                          select
+                          name="language"
+                          value={settings.language}
+                          onChange={handleSettingChange}
+                          variant="outlined"
+                          size="small"
+                          sx={{ minWidth: 120 }}
+                        >
+                          <MenuItem value="en">English</MenuItem>
+                          <MenuItem value="es">Spanish</MenuItem>
+                          <MenuItem value="fr">French</MenuItem>
+                        </TextField>
+                      </ListItemSecondaryAction>
+                    </ListItem>
+                  </List>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Security Settings */}
+            <Grid item xs={12} md={6}>
+              <Card elevation={2} sx={{ borderRadius: 2 }}>
+                <CardHeader
+                  title="Security"
+                  avatar={
+                    <Avatar sx={{ bgcolor: '#10B981' }}>
+                      <SecurityIcon />
+                    </Avatar>
+                  }
+                />
+                <Divider />
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Change Password
+                  </Typography>
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12}>
+                      <TextField
+                        label="Current Password"
+                        name="currentPassword"
+                        type="password"
+                        fullWidth
+                        value={passwordForm.currentPassword}
+                        onChange={handlePasswordChange}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12}>
+                      <TextField
+                        label="New Password"
+                        name="newPassword"
+                        type="password"
+                        fullWidth
+                        value={passwordForm.newPassword}
+                        onChange={handlePasswordChange}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12}>
+                      <TextField
+                        label="Confirm New Password"
+                        name="confirmPassword"
+                        type="password"
+                        fullWidth
+                        value={passwordForm.confirmPassword}
+                        onChange={handlePasswordChange}
+                      />
+                    </Grid>
+
+                    <Grid item xs={12}>
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        onClick={handleChangePassword}
+                      >
+                        Change Password
+                      </Button>
+                    </Grid>
+                  </Grid>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Save Button */}
+            <Grid item xs={12}>
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleSaveSettings}
+                  startIcon={<SettingsIcon />}
+                >
+                  Save Settings
+                </Button>
+              </Box>
+            </Grid>
+          </Grid>
+        </Box>
+      </Paper>
+    </Container>
+  );
+};
+
+export default UserSettings;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\context\AuthContext.js =====
+
+// src/context/AuthContext.js
+import React, { createContext, useState, useEffect, useContext } from 'react';
+import { getToken, removeAuthToken, getUserInfo } from '../api/api';
+
+const AuthContext = createContext();
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const checkAuth = () => {
+      console.log("Checking authentication status");
+      const token = getToken();
+      console.log("Token found:", !!token);
+
+      if (token) {
+        const userInfo = getUserInfo();
+        console.log("User info:", userInfo);
+        setUser(userInfo);
+      }
+      setLoading(false);
+    };
+
+    checkAuth();
+  }, []);
+
+  const login = (token) => {
+    console.log("Setting auth token:", !!token);
+    localStorage.setItem("token", token);
+    const userInfo = getUserInfo();
+    console.log("User info from token:", userInfo);
+    setUser(userInfo);
+  };
+
+  const logout = () => {
+    console.log("Logging out");
+    removeAuthToken();
+    setUser(null);
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, login, logout, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => useContext(AuthContext);
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\routes\PrivateRoute.jsx =====
+
+// src/components/PrivateRoute.jsx
+import React, { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { CircularProgress, Box } from '@mui/material';
+import { useAuth } from '../context/AuthContext';
+
+const PrivateRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  const [isChecking, setIsChecking] = useState(true);
+
+  useEffect(() => {
+    console.log("PrivateRoute: user:", user, "loading:", loading);
+    const token = localStorage.getItem("token");
+    console.log("PrivateRoute: token found:", !!token);
+
+    if (!token) {
+      setIsChecking(false);
+      return;
+    }
+
+    if (!user && loading) {
+      const timer = setTimeout(() => {
+        setIsChecking(false);
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    } else {
+      setIsChecking(false);
+    }
+  }, [user, loading]);
+
+  if (isChecking || loading) {
+    console.log("PrivateRoute: showing loading");
+    return (
+      <Box
+        display="flex"
+        justifyContent="center"
+        alignItems="center"
+        minHeight="100vh"
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (!user) {
+    console.log("PrivateRoute: no user, redirecting to login");
+    return <Navigate to="/" replace />;
+  }
+
+  console.log("PrivateRoute: rendering children");
+  return children;
+};
+
+export default PrivateRoute;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\App.jsx =====
+
+// src/App.jsx
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ThemeProvider, CssBaseline } from '@mui/material';
+import theme from './theme';
+import { AuthProvider } from './context/AuthContext'; // Import AuthProvider
+
+import LoginForm from './components/LoginForm';
+import SignupForm from './components/SignupForm';
+import Dashboard from './components/Dashboard';
+import Navbar from './components/Navbar';
+import PrivateRoute from './routes/PrivateRoute';
+
+function App() {
+  return (
+
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <AuthProvider> {/* Wrap with AuthProvider */}
+        <Router>
+          <Navbar />
+          <Routes>
+            <Route path="/" element={<LoginForm />} />
+            <Route path="/signup" element={<SignupForm />} />
+            <Route
+              path="/dashboard"
+              element={
+                <PrivateRoute>
+                  <Dashboard />
+                </PrivateRoute>
+              }
+            />
+          </Routes>
+        </Router>
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
+
+export default App;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\App.test.js =====
+
+import { render, screen } from '@testing-library/react';
+import App from './App';
+
+test('renders learn react link', () => {
+  render(<App />);
+  const linkElement = screen.getByText(/learn react/i);
+  expect(linkElement).toBeInTheDocument();
+});
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\index.js =====
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './App';
+import reportWebVitals from './reportWebVitals';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+// If you want to start measuring performance in your app, pass a function
+// to log results (for example: reportWebVitals(console.log))
+// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+reportWebVitals();
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\Login.js =====
+
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { loginUser } from "./api/api"; // from api.js
+
+function Login() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await loginUser(username, password);
+      localStorage.setItem("token", res.token); // save JWT token
+      navigate("/dashboard"); // redirect to dashboard
+    } catch (err) {
+      console.error(err);
+      setError("Login failed. Check username and password.");
+    }
+  };
+
+  return (
+    <div>
+      <h1>Login</h1>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+      <form onSubmit={handleSubmit}>
+        <input
+          type="text"
+          placeholder="Username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <button type="submit">Login</button>
+      </form>
+    </div>
+  );
+}
+
+export default Login;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\PrivateRoute.js =====
+
+import React from "react";
+import { Navigate } from "react-router-dom";
+
+const PrivateRoute = ({ children }) => {
+  const token = localStorage.getItem("token");
+  if (!token) return <Navigate to="/login" />;
+  return children;
+};
+
+export default PrivateRoute;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\Properties.js =====
+
+import React from "react";
+
+function Properties() {
+  return (
+    <div>
+      <h1>Properties</h1>
+      <p>List of properties will appear here.</p>
+    </div>
+  );
+}
+
+export default Properties;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\reportWebVitals.js =====
+
+const reportWebVitals = onPerfEntry => {
+  if (onPerfEntry && onPerfEntry instanceof Function) {
+    import('web-vitals').then(({ getCLS, getFID, getFCP, getLCP, getTTFB }) => {
+      getCLS(onPerfEntry);
+      getFID(onPerfEntry);
+      getFCP(onPerfEntry);
+      getLCP(onPerfEntry);
+      getTTFB(onPerfEntry);
+    });
+  }
+};
+
+export default reportWebVitals;
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\setupTests.js =====
+
+// jest-dom adds custom jest matchers for asserting on DOM nodes.
+// allows you to do things like:
+// expect(element).toHaveTextContent(/react/i)
+// learn more: https://github.com/testing-library/jest-dom
+import '@testing-library/jest-dom';
+
+// ===== C:\Users\cyanm\PycharmProjects\FlaskProject\landstate-backend\frontend\src\theme.js =====
+
+// src/theme.js
+import { createTheme } from '@mui/material/styles';
+
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#2C6E49', // Deep forest green
+      light: '#4C956C', // Lighter green
+      dark: '#1E4B37', // Darker green
+      contrastText: '#FFFFFF',
+    },
+    secondary: {
+      main: '#D4A373', // Warm terracotta
+      light: '#E9C46A', // Lighter terracotta
+      dark: '#BC6C25', // Darker terracotta
+      contrastText: '#FFFFFF',
+    },
+    background: {
+      default: '#F5F2ED', // Light cream
+      paper: '#FFFFFF',
+    },
+    text: {
+      primary: '#2C3E50', // Dark blue-gray
+      secondary: '#5C6B73', // Muted gray
+    },
+    divider: 'rgba(44, 110, 73, 0.12)',
+  },
+  typography: {
+    fontFamily: '"Inter", "Poppins", "Roboto", "Helvetica", "Arial", sans-serif',
+    h1: {
+      fontSize: '2.5rem',
+      fontWeight: 700,
+      lineHeight: 1.2,
+      letterSpacing: '-0.5px',
+    },
+    h2: {
+      fontSize: '2rem',
+      fontWeight: 600,
+      lineHeight: 1.3,
+      letterSpacing: '-0.5px',
+    },
+    h3: {
+      fontSize: '1.75rem',
+      fontWeight: 600,
+      lineHeight: 1.3,
+    },
+    h4: {
+      fontSize: '1.5rem',
+      fontWeight: 500,
+      lineHeight: 1.4,
+    },
+    h5: {
+      fontSize: '1.25rem',
+      fontWeight: 500,
+      lineHeight: 1.4,
+    },
+    h6: {
+      fontSize: '1.125rem',
+      fontWeight: 500,
+      lineHeight: 1.4,
+    },
+    body1: {
+      fontSize: '1rem',
+      lineHeight: 1.6,
+      fontWeight: 400,
+    },
+    body2: {
+      fontSize: '0.875rem',
+      lineHeight: 1.5,
+      fontWeight: 400,
+    },
+    button: {
+      fontWeight: 500,
+      textTransform: 'none',
+      letterSpacing: '0.5px',
+    },
+  },
+  shape: {
+    borderRadius: 12,
+  },
+  shadows: [
+    'none',
+    '0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1)',
+    '0 3px 6px rgba(0,0,0,0.05), 0 2px 4px rgba(0,0,0,0.1)',
+    '0 10px 20px rgba(0,0,0,0.05), 0 3px 6px rgba(0,0,0,0.1)',
+    '0 15px 25px rgba(0,0,0,0.05), 0 5px 10px rgba(0,0,0,0.1)',
+    '0 20px 40px rgba(0,0,0,0.1)',
+    ...Array(20).fill('none'),
+  ],
+  components: {
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          borderRadius: 8,
+          padding: '10px 20px',
+          fontSize: '0.875rem',
+          fontWeight: 500,
+          boxShadow: 'none',
+          '&:hover': {
+            boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+          },
+        },
+        contained: {
+          '&:hover': {
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          },
+        },
+        outlined: {
+          borderWidth: '1.5px',
+          '&:hover': {
+            borderWidth: '1.5px',
+          },
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 3px 6px rgba(0,0,0,0.05), 0 2px 4px rgba(0,0,0,0.1)',
+          borderRadius: 12,
+          background: '#FFFFFF',
+        },
+        elevation: {
+          boxShadow: '0 10px 20px rgba(0,0,0,0.05), 0 3px 6px rgba(0,0,0,0.1)',
+        },
+      },
+    },
+    MuiTextField: {
+      styleOverrides: {
+        root: {
+          '& .MuiOutlinedInput-root': {
+            borderRadius: 8,
+            '&:hover .MuiOutlinedInput-notchedOutline': {
+              borderColor: '#2C6E49',
+            },
+          },
+        },
+      },
+    },
+    MuiAppBar: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1)',
+          background: '#FFFFFF',
+          color: '#2C3E50',
+        },
+      },
+    },
+    MuiListItem: {
+      styleOverrides: {
+        root: {
+          '&.Mui-selected': {
+            backgroundColor: 'rgba(44, 110, 73, 0.08)',
+          },
+        },
+      },
+    },
+    MuiDivider: {
+      styleOverrides: {
+        root: {
+          backgroundColor: 'rgba(44, 110, 73, 0.12)',
+        },
+      },
+    },
+  },
+});
+
+export default theme;
